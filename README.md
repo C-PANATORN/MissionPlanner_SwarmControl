@@ -16,6 +16,7 @@
 - [License](#license)
 
 ## Introduction
+
 ### Getting Started 
 ### Installation 
 
@@ -131,7 +132,6 @@ sudo ~/catkin_ws/src/mavros/mavros/scripts/install_geographiclib_datasets.sh
 ```
 #### ROS Packages
 Install example packages for launching mutli-drone simulation
-- [Intelligent-Quads/iq_sim](https://github.com/Intelligent-Quads/iq_sim)  
 ```bash
 cd ~/catkin_ws/src
 git clone https://github.com/Intelligent-Quads/iq_sim.git
