@@ -1,8 +1,10 @@
 # MissionPlanner_SwarmControl
+The aim of this repository is to provide a scalable platform for easy deployment and testing of multi-agent UAV systems. The default controller is based on a leader-follower approach taken from [MissionPlanner Master Repository](https://github.com/ArduPilot/MissionPlanner), with swarm control modifications.
 
-- [Introduction](#introduction)
-  - [Getting Started](#getting-started)
-  - [How to Compile](#how-to-compile)
+This project was submitted in partial fulfillment od the requirements for the degree of Bachelor of Engineering (Mechatronics Engineering) Faculty of Engineering, King Mongkut's University of Technology 
+Thonburi 2024.
+
+- [How to Compile](#how-to-compile)
 - [Usage](#usage)
 - [Advanced](#advanced)
   - [Ardupilot Installation](#ardupilot-stil-installation)
@@ -15,11 +17,7 @@
   - [MAVProxy Installation](#mavproxy-installation)
 - [License](#license)
 
-## Introduction
-
-### Getting Started 
-
-### How to Compile
+## How to Compile
 
 ### On Windows (Recommended)
 
@@ -206,8 +204,8 @@ source ~/.bashrc
 This software is distributed under the GPL-2.0 License:
 
 ```
-stitchmd
-Copyright (C) 2023 Abhinav Gupta
+MissionPlanner_SwarmControl
+Copyright (C) 2024 Panatorn Chiaranai
 
 This program is free software; you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
