@@ -1,7 +1,9 @@
 # MissionPlanner_SwarmControl
+[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
+
 The aim of this repository is to provide a scalable platform for easy deployment and testing of multi-agent UAV systems. The default controller is based on a leader-follower approach taken from [MissionPlanner Master Repository](https://github.com/ArduPilot/MissionPlanner), with swarm control modifications.
 
-This project was submitted in partial fulfillment od the requirements for the degree of Bachelor of Engineering (Mechatronics Engineering) Faculty of Engineering, King Mongkut's University of Technology 
+This project was submitted in partial fulfillment of the requirements for the degree of Bachelor of Engineering (Mechatronics Engineering) Faculty of Engineering, King Mongkut's University of Technology 
 Thonburi 2024.
 
 - [How to Compile](#how-to-compile)
