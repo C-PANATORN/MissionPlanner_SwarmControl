@@ -1,6 +1,8 @@
-# MissionPlanner
+# MissionPlanner_SwarmControl
 
 ![Dot Net](https://github.com/ardupilot/missionplanner/actions/workflows/main.yml/badge.svg) ![Android](https://github.com/ardupilot/missionplanner/actions/workflows/android.yml/badge.svg) ![OSX/IOS](https://github.com/ardupilot/missionplanner/actions/workflows/mac.yml/badge.svg)
+
+This repository contains a modified formation controller for Collborative Multi-Agent UAVs using Nonlinear Model Referenece Control (NMPC)
 
 Website : http://ardupilot.org/planner/
 
