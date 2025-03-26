@@ -139,7 +139,7 @@ namespace MissionPlanner.Swarm
                             if (dist < minSeparation && dist > 0.000001f)
                             {
                                 float strength = avoidanceGain / (dist * dist);
-                                avoidance += NormalizeVector(rel) * strength;
+                                avoidance += VectorUtils.NormalizeVector(rel) * strength;
                             }
                         }
                     }
@@ -147,10 +147,7 @@ namespace MissionPlanner.Swarm
                     // Duplicate block removed
                 }
             }
-        }
-                    }
-
-                    if (!timestamps.ContainsKey(mav)) timestamps[mav] = DateTime.UtcNow;
+         timestamps[mav] = DateTime.UtcNow;
                     float dt = (float)(DateTime.UtcNow - timestamps[mav]).TotalSeconds;
                     timestamps[mav] = DateTime.UtcNow;
 
@@ -172,10 +169,10 @@ namespace MissionPlanner.Swarm
                     att_target.q = new float[4] { (float)q.q1, (float)q.q2, (float)q.q3, (float)q.q4 };
 
                     port.sendPacket(att_target, mav.sysid, mav.compid);
-                }
-                            }
+                                }
             }
         }
+
 
     public class AdaptiveFormationController
     {
@@ -259,7 +256,9 @@ namespace MissionPlanner.Swarm
     }
 
     // Helper method to normalize Vector3 in C# 7.3
-    public static Vector3 NormalizeVector(Vector3 v)
+    public static class VectorUtils
+    {
+        public static Vector3 NormalizeVector(Vector3 v)
     {
         var length = Math.Sqrt(v.x * v.x + v.y * v.y + v.z * v.z);
         if (length == 0) return new Vector3(0, 0, 0);
