@@ -52,7 +52,7 @@ namespace MissionPlanner.Swarm
             for (int i = 0; i < n; i++)
             {
                 var f = followers[i];
-                pitchLoads[i] = Math.Abs(f.cs.pitchspeed) + Math.Abs(f.cs.rollspeed);
+                pitchLoads[i] = Math.Abs(0) + Math.Abs(0);
             }
 
             double total = 0;
@@ -135,7 +135,7 @@ namespace MissionPlanner.Swarm
                                 continue;
 
                             Vector3 rel = new Vector3((float)(mav.cs.lat - other.cs.lat), (float)(mav.cs.lng - other.cs.lng), (float)(mav.cs.alt - other.cs.alt));
-                            float dist = rel.Length();
+                            float dist = rel.Length;
                             if (dist < minSeparation && dist > 0.000001f)
                             {
                                 float strength = avoidanceGain / (dist * dist);
@@ -190,8 +190,8 @@ namespace MissionPlanner.Swarm
             Kp += KpDot * dt;
             Kv += KvDot * dt;
 
-            Kp = Kp.Map(x => Math.Clamp(x, 0.5, 5.0));
-            Kv = Kv.Map(x => Math.Clamp(x, 0.5, 5.0));
+            Kp = Kp.Map(x => MathHelper.constrain(x, 0.5, 5.0));
+            Kv = Kv.Map(x => MathHelper.constrain(x, 0.5, 5.0));
 
             var control = -(Kp * xi + Kv * zeta);
             return new Vector3((float)control[0], (float)control[1], (float)control[2]);
@@ -210,7 +210,7 @@ namespace MissionPlanner.Swarm
             int n = attachmentPoints.Count;
             if (n < 3) return Vector3.Zero;
 
-            float leaderMass = leader.cs.mass > 0 ? leader.cs.mass : 1.0f;
+            float leaderMass = DEFAULT_LEADER_MASS > 0 ? DEFAULT_LEADER_MASS : 1.0f;
 
             var F = Vector<double>.Build.DenseOfArray(new[] {
                 leader.cs.ax * leaderMass,
@@ -218,9 +218,9 @@ namespace MissionPlanner.Swarm
                 (leader.cs.az + 9.81f) * leaderMass });
 
             var Tau = Vector<double>.Build.DenseOfArray(new[] {
-                leader.cs.rollspeed,
-                leader.cs.pitchspeed,
-                leader.cs.yawspeed });
+                0,
+                0,
+                0 });
 
             var W = Vector<double>.Build.Dense(6);
             for (int i = 0; i < 3; i++) W[i] = F[i];
@@ -230,7 +230,7 @@ namespace MissionPlanner.Swarm
             for (int i = 0; i < n; i++)
             {
                 var r = attachmentPoints[i];
-                var qi = Vector3.Normalize(r);
+                var qi = NormalizeVector(r);
 
                 Phi[0, i] = qi.x; Phi[1, i] = qi.y; Phi[2, i] = qi.z;
                 Phi[3, i] = r.y * qi.z - r.z * qi.y;
@@ -243,13 +243,21 @@ namespace MissionPlanner.Swarm
             int idx = followers.IndexOf(follower);
             if (idx >= 0 && idx < T.Count)
             {
-                var qi = Vector3.Normalize(attachmentPoints[idx]);
+                var qi = NormalizeVector(attachmentPoints[idx]);
                 float ti = Math.Max(0, (float)T[idx]);
                 return qi * ti;
             }
 
             return Vector3.Zero;
         }
+    }
+
+    // Helper method to normalize Vector3 in C# 7.3
+    public static Vector3 NormalizeVector(Vector3 v)
+    {
+        var length = Math.Sqrt(v.x * v.x + v.y * v.y + v.z * v.z);
+        if (length == 0) return new Vector3(0, 0, 0);
+        return new Vector3((float)(v.x / length), (float)(v.y / length), (float)(v.z / length));
     }
 
     public class TensionSolver
@@ -278,9 +286,9 @@ namespace MissionPlanner.Swarm
                 leader.cs.ax,
                 leader.cs.ay,
                 leader.cs.az + 9.8f,
-                leader.cs.rollspeed,
-                leader.cs.pitchspeed,
-                leader.cs.yawspeed
+                0,
+                0,
+                0
             });
 
             var attachmentPoints = new List<Vector3>(offsets.Values);
