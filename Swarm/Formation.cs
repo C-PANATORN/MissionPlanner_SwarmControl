@@ -31,7 +31,7 @@ namespace MissionPlanner.Swarm
         private DateTime lastUpdate = DateTime.UtcNow;
         private LoadAttitudeController attitudeController = new LoadAttitudeController();
         private TensionSolver tensionSolver = new TensionSolver();
-        private float minSeparation = 0.00005f;
+        private float minSeparation = 0.00002f;
         private float avoidanceGain = 0.0001f;
 
         public void setOffsets(MAVState mav, double x, double y, double z)
@@ -263,15 +263,15 @@ namespace MissionPlanner.Swarm
     {
         private Matrix<double> Kp = Matrix<double>.Build.DenseIdentity(3);
         private Matrix<double> Kv = Matrix<double>.Build.DenseIdentity(3);
-        private readonly double sigma = 0.05;
-        private readonly double gammaP = 0.1;
-        private readonly double gammaV = 0.1;
+        private readonly double sigma = 0.02; //Adaptive rate
+        private readonly double gammaP = 0.05; //Proportional gain update rate
+        private readonly double gammaV = 0.05; //Derivative gain update rate
 
         public Vector3 ComputeControl(Vector3 posError, Vector3 velError, float dt)
         {
             var xi = Vector<double>.Build.DenseOfArray(new double[] { posError.x, posError.y, posError.z });
             var zeta = Vector<double>.Build.DenseOfArray(new double[] { velError.x, velError.y, velError.z });
-
+            
             var KpDot = -sigma * (Kp - Matrix<double>.Build.DenseIdentity(3)) +
                         gammaP * xi.ToColumnMatrix() * xi.ToRowMatrix();
             var KvDot = -sigma * (Kv - Matrix<double>.Build.DenseIdentity(3)) +
@@ -280,6 +280,7 @@ namespace MissionPlanner.Swarm
             Kp += KpDot * dt;
             Kv += KvDot * dt;
 
+            // PD Clamping factor
             Kp = Kp.Map(x => MathHelper.constrain(x, 0.5, 5.0));
             Kv = Kv.Map(x => MathHelper.constrain(x, 0.5, 5.0));
 
