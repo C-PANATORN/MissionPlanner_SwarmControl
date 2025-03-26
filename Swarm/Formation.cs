@@ -24,6 +24,10 @@ namespace MissionPlanner.Swarm
         const float GRAVITY = 9.81f;
         const float MAX_THRUST_N = UAV_MASS_KG * GRAVITY * 3.0f; // 3x hover thrust (~20.6 N)
 
+        // Updated parameters for metric (UTM in meters) units
+        private float minSeparation = 5.0f;      // Minimum separation between drones in meters
+        private float avoidanceGain = 5.0f;      // Gain for collision avoidance (adjust as needed)
+
         Dictionary<MAVState, Vector3> offsets = new Dictionary<MAVState, Vector3>();
         private Dictionary<MAVState, AdaptiveFormationController> controllers = new Dictionary<MAVState, AdaptiveFormationController>();
         private Dictionary<MAVState, DateTime> timestamps = new Dictionary<MAVState, DateTime>();
@@ -31,8 +35,6 @@ namespace MissionPlanner.Swarm
         private DateTime lastUpdate = DateTime.UtcNow;
         private LoadAttitudeController attitudeController = new LoadAttitudeController();
         private TensionSolver tensionSolver = new TensionSolver();
-        private float minSeparation = 0.00002f;
-        private float avoidanceGain = 0.000001f;
 
         public void setOffsets(MAVState mav, double x, double y, double z)
             => offsets[mav] = new Vector3((float)x, (float)y, (float)z);
@@ -97,6 +99,16 @@ namespace MissionPlanner.Swarm
 
             UpdateAdaptiveLambda();
 
+            // Unified coordinate transformation for all drones using the leader's UTM zone.
+            int utmzone = (int)((Leader.cs.lng - -186.0) / 6.0);
+            IProjectedCoordinateSystem utm = ProjectedCoordinateSystem.WGS84_UTM(utmzone, Leader.cs.lat >= 0);
+            CoordinateTransformationFactory ctfac = new CoordinateTransformationFactory();
+            IGeographicCoordinateSystem wgs84 = GeographicCoordinateSystem.WGS84;
+            ICoordinateTransformation trans = ctfac.CreateFromCoordinateSystems(wgs84, utm);
+
+            // Convert leader's GPS to UTM once.
+            double[] pLeaderBase = trans.MathTransform.Transform(new double[] { Leader.cs.lng, Leader.cs.lat });
+
             foreach (var port in MainV2.Comports.ToArray())
             {
                 foreach (var mav in port.MAVlist)
@@ -110,27 +122,26 @@ namespace MissionPlanner.Swarm
                     Vector3 offset = getOffsets(mav);
                     Vector3 desiredPosition, desiredVelocity;
 
-                    int utmzone = (int)((Leader.cs.lng - -186.0) / 6.0);
-                    IProjectedCoordinateSystem utm = ProjectedCoordinateSystem.WGS84_UTM(utmzone, Leader.cs.lat >= 0);
-                    CoordinateTransformationFactory ctfac = new CoordinateTransformationFactory();
-                    IGeographicCoordinateSystem wgs84 = GeographicCoordinateSystem.WGS84;
-                    ICoordinateTransformation trans = ctfac.CreateFromCoordinateSystems(wgs84, utm);
-
-                    double[] pll = new double[] { Leader.cs.lng, Leader.cs.lat };
-                    double[] pLeader;
-                    try { pLeader = trans.MathTransform.Transform(pll); }
-                    catch { return; }
-
+                    // Rotate offset based on leader's heading.
                     var heading = -Leader.cs.yaw * MathHelper.deg2rad;
                     var dx = offset.x * Math.Cos(heading) - offset.y * Math.Sin(heading);
                     var dy = offset.x * Math.Sin(heading) + offset.y * Math.Cos(heading);
 
-                    pLeader[0] += dx;
-                    pLeader[1] += dy;
+                    // Compute desired follower position in UTM coordinates.
+                    double[] pLeader = new double[2];
+                    pLeader[0] = pLeaderBase[0] + dx;
+                    pLeader[1] = pLeaderBase[1] + dy;
 
+                    // Convert follower's GPS to UTM.
                     double[] pFollower;
-                    try { pFollower = trans.MathTransform.Transform(new double[] { mav.cs.lng, mav.cs.lat }); }
-                    catch { return; }
+                    try
+                    {
+                        pFollower = trans.MathTransform.Transform(new double[] { mav.cs.lng, mav.cs.lat });
+                    }
+                    catch
+                    {
+                        continue;
+                    }
 
                     desiredPosition = new Vector3((float)pLeader[0], (float)pLeader[1], (float)(Leader.cs.alt + offset.z));
                     desiredVelocity = new Vector3((float)Leader.cs.vx, (float)Leader.cs.vy, (float)Leader.cs.vz);
@@ -139,6 +150,7 @@ namespace MissionPlanner.Swarm
                     Vector3 posError = desiredPosition - followerPos;
                     Vector3 velError = desiredVelocity - new Vector3((float)mav.cs.vx, (float)mav.cs.vy, (float)mav.cs.vz);
 
+                    // ----- Collision Avoidance using UTM (meters) -----
                     Vector3 avoidance = Vector3.Zero;
                     foreach (var otherPort in MainV2.Comports)
                     {
@@ -147,24 +159,38 @@ namespace MissionPlanner.Swarm
                             if (other == mav || other == Leader)
                                 continue;
 
+                            double[] posOther;
+                            try
+                            {
+                                posOther = trans.MathTransform.Transform(new double[] { other.cs.lng, other.cs.lat });
+                            }
+                            catch
+                            {
+                                continue;
+                            }
+
+                            // Compute relative position in UTM space.
                             Vector3 rel = new Vector3(
-                                (float)(mav.cs.lat - other.cs.lat),
-                                (float)(mav.cs.lng - other.cs.lng),
+                                (float)(pFollower[0] - posOther[0]),
+                                (float)(pFollower[1] - posOther[1]),
                                 (float)(mav.cs.alt - other.cs.alt));
                             float dist = (float)Math.Sqrt(rel.x * rel.x + rel.y * rel.y + rel.z * rel.z);
-                            if (dist < minSeparation && dist > 0.000001f)
+
+                            if (dist < minSeparation && dist > 0.001f)
                             {
                                 float strength = avoidanceGain / (dist * dist);
                                 avoidance += VectorUtils.NormalizeVector(rel) * strength;
                             }
                         }
                     }
+                    // -----------------------------------------------------
 
                     if (!timestamps.ContainsKey(mav))
                         timestamps[mav] = DateTime.UtcNow;
                     float dt = (float)(DateTime.UtcNow - timestamps[mav]).TotalSeconds;
                     timestamps[mav] = DateTime.UtcNow;
 
+                    // Sum up the various control contributions.
                     Vector3 control = controllers[mav].ComputeControl(posError, velError, dt);
                     control += avoidance;
                     control += attitudeController.CompensateRigidBodyDynamics(Leader, mav, offsets);
@@ -263,9 +289,9 @@ namespace MissionPlanner.Swarm
     {
         private Matrix<double> Kp = Matrix<double>.Build.DenseIdentity(3);
         private Matrix<double> Kv = Matrix<double>.Build.DenseIdentity(3);
-        private readonly double sigma = 0.02; //Adaptive rate
-        private readonly double gammaP = 0.05; //Proportional gain update rate
-        private readonly double gammaV = 0.05; //Derivative gain update rate
+        private readonly double sigma = 0.02; // Adaptive rate
+        private readonly double gammaP = 0.05; // Proportional gain update rate
+        private readonly double gammaV = 0.05; // Derivative gain update rate
 
         public Vector3 ComputeControl(Vector3 posError, Vector3 velError, float dt)
         {
