@@ -169,5 +169,148 @@ namespace MissionPlanner.Swarm
                 }
             }
         }
+        }
+
+    public class AdaptiveFormationController
+    {
+        private Matrix<double> Kp = Matrix<double>.Build.DenseIdentity(3);
+        private Matrix<double> Kv = Matrix<double>.Build.DenseIdentity(3);
+        private readonly double sigma = 0.05;
+        private readonly double gammaP = 0.1;
+        private readonly double gammaV = 0.1;
+
+        public Vector3 ComputeControl(Vector3 posError, Vector3 velError, float dt)
+        {
+            var xi = Vector<double>.Build.DenseOfArray(new[] { (double)posError.x, posError.y, posError.z });
+            var zeta = Vector<double>.Build.DenseOfArray(new[] { (double)velError.x, velError.y, velError.z });
+
+            var KpDot = -sigma * (Kp - Matrix<double>.Build.DenseIdentity(3)) + gammaP * xi.ToColumnMatrix() * xi.ToRowMatrix();
+            var KvDot = -sigma * (Kv - Matrix<double>.Build.DenseIdentity(3)) + gammaV * zeta.ToColumnMatrix() * zeta.ToRowMatrix();
+
+            Kp += KpDot * dt;
+            Kv += KvDot * dt;
+
+            Kp = Kp.Map(x => Math.Clamp(x, 0.5, 5.0));
+            Kv = Kv.Map(x => Math.Clamp(x, 0.5, 5.0));
+
+            var control = -(Kp * xi + Kv * zeta);
+            return new Vector3((float)control[0], (float)control[1], (float)control[2]);
+        }
     }
-}  
+
+    public class LoadAttitudeController
+    {
+        public Vector3 CompensateRigidBodyDynamics(MAVState leader, MAVState follower, Dictionary<MAVState, Vector3> offsets)
+        {
+            if (!offsets.ContainsKey(follower))
+                return Vector3.Zero;
+
+            var followers = new List<MAVState>(offsets.Keys);
+            var attachmentPoints = new List<Vector3>(offsets.Values);
+            int n = attachmentPoints.Count;
+            if (n < 3) return Vector3.Zero;
+
+            float leaderMass = leader.cs.mass > 0 ? leader.cs.mass : 1.0f;
+
+            var F = Vector<double>.Build.DenseOfArray(new[] {
+                leader.cs.ax * leaderMass,
+                leader.cs.ay * leaderMass,
+                (leader.cs.az + 9.81f) * leaderMass });
+
+            var Tau = Vector<double>.Build.DenseOfArray(new[] {
+                leader.cs.rollspeed,
+                leader.cs.pitchspeed,
+                leader.cs.yawspeed });
+
+            var W = Vector<double>.Build.Dense(6);
+            for (int i = 0; i < 3; i++) W[i] = F[i];
+            for (int i = 0; i < 3; i++) W[i + 3] = Tau[i];
+
+            var Phi = Matrix<double>.Build.Dense(6, n);
+            for (int i = 0; i < n; i++)
+            {
+                var r = attachmentPoints[i];
+                var qi = Vector3.Normalize(r);
+
+                Phi[0, i] = qi.x; Phi[1, i] = qi.y; Phi[2, i] = qi.z;
+                Phi[3, i] = r.y * qi.z - r.z * qi.y;
+                Phi[4, i] = r.z * qi.x - r.x * qi.z;
+                Phi[5, i] = r.x * qi.y - r.y * qi.x;
+            }
+
+            var PhiPlus = Phi.PseudoInverse();
+            var T = PhiPlus * W;
+            int idx = followers.IndexOf(follower);
+            if (idx >= 0 && idx < T.Count)
+            {
+                var qi = Vector3.Normalize(attachmentPoints[idx]);
+                float ti = Math.Max(0, (float)T[idx]);
+                return qi * ti;
+            }
+
+            return Vector3.Zero;
+        }
+    }
+
+    public class TensionSolver
+    {
+        private Vector<double> Lambda;
+
+        public TensionSolver()
+        {
+            Lambda = Vector<double>.Build.Dense(3, 2.0);
+        }
+
+        public void SetLambda(Vector<double> newLambda)
+        {
+            Lambda = newLambda;
+        }
+
+        private Matrix<double> ComputeNullspace(Matrix<double> Phi)
+        {
+            var svd = Phi.Svd(true);
+            return svd.VT.SubMatrix(svd.Rank, svd.VT.RowCount - svd.Rank, 0, svd.VT.ColumnCount).Transpose();
+        }
+
+        public Vector3 ComputeTensionCorrectionBalanced(MAVState leader, MAVState follower, Dictionary<MAVState, Vector3> offsets)
+        {
+            var W = Vector<double>.Build.DenseOfArray(new[] {
+                leader.cs.ax,
+                leader.cs.ay,
+                leader.cs.az + 9.8f,
+                leader.cs.rollspeed,
+                leader.cs.pitchspeed,
+                leader.cs.yawspeed
+            });
+
+            var attachmentPoints = new List<Vector3>(offsets.Values);
+            int n = attachmentPoints.Count;
+            var Phi = Matrix<double>.Build.Dense(6, n);
+
+            for (int i = 0; i < n; i++)
+            {
+                var r = attachmentPoints[i];
+                var qi = Vector3.Normalize(r);
+                Phi[0, i] = qi.x; Phi[1, i] = qi.y; Phi[2, i] = qi.z;
+                Phi[3, i] = r.y * qi.z - r.z * qi.y;
+                Phi[4, i] = r.z * qi.x - r.x * qi.z;
+                Phi[5, i] = r.x * qi.y - r.y * qi.x;
+            }
+
+            var PhiPlus = Phi.PseudoInverse();
+            var N = ComputeNullspace(Phi);
+            var T = PhiPlus * W;
+            if (N.ColumnCount == Lambda?.Count)
+                T += N * Lambda;
+
+            int idx = new List<MAVState>(offsets.Keys).IndexOf(follower);
+            if (idx >= 0 && idx < T.Count)
+            {
+                var qi = Vector3.Normalize(offsets[follower]);
+                return qi * (float)Math.Max(0, T[idx]);
+            }
+
+            return Vector3.Zero;
+        }
+    }
+}
