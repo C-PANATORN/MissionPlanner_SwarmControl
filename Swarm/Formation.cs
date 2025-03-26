@@ -19,13 +19,13 @@ namespace MissionPlanner.Swarm
         const float MAX_THRUST_N = UAV_MASS_KG * GRAVITY * 3.0f; // 3x hover thrust (~20.6 N)
         const float DEFAULT_LEADER_MASS = 1.0f;
 
-        Dictionary<MAVState, Vector3> offsets = new();
-        private Dictionary<MAVState, AdaptiveFormationController> controllers = new();
-        private Dictionary<MAVState, DateTime> timestamps = new();
-        private PointLatLngAlt masterpos = new();
+        Dictionary<MAVState, Vector3> offsets = new Dictionary<MAVState, Vector3>();
+        private Dictionary<MAVState, AdaptiveFormationController> controllers = new Dictionary<MAVState, AdaptiveFormationController>();
+        private Dictionary<MAVState, DateTime> timestamps = new Dictionary<MAVState, DateTime>();
+        private PointLatLngAlt masterpos = new PointLatLngAlt();
         private DateTime lastUpdate = DateTime.UtcNow;
-        private LoadAttitudeController attitudeController = new();
-        private TensionSolver tensionSolver = new();
+        private LoadAttitudeController attitudeController = new LoadAttitudeController();
+        private TensionSolver tensionSolver = new TensionSolver();
         private float minSeparation = 0.00005f;
         private float avoidanceGain = 0.0001f;
 
@@ -99,7 +99,7 @@ namespace MissionPlanner.Swarm
 
                     int utmzone = (int)((Leader.cs.lng - -186.0) / 6.0);
                     IProjectedCoordinateSystem utm = ProjectedCoordinateSystem.WGS84_UTM(utmzone, Leader.cs.lat >= 0);
-                    CoordinateTransformationFactory ctfac = new();
+                    CoordinateTransformationFactory ctfac = new CoordinateTransformationFactory();
                     IGeographicCoordinateSystem wgs84 = GeographicCoordinateSystem.WGS84;
                     ICoordinateTransformation trans = ctfac.CreateFromCoordinateSystems(wgs84, utm);
 
@@ -134,7 +134,7 @@ namespace MissionPlanner.Swarm
                             if (other == mav || other == Leader)
                                 continue;
 
-                            Vector3 rel = new((float)(mav.cs.lat - other.cs.lat), (float)(mav.cs.lng - other.cs.lng), (float)(mav.cs.alt - other.cs.alt));
+                            Vector3 rel = new Vector3((float)(mav.cs.lat - other.cs.lat), (float)(mav.cs.lng - other.cs.lng), (float)(mav.cs.alt - other.cs.alt));
                             float dist = rel.Length();
                             if (dist < minSeparation && dist > 0.000001f)
                             {
@@ -153,7 +153,7 @@ namespace MissionPlanner.Swarm
                     control += attitudeController.CompensateRigidBodyDynamics(Leader, mav, offsets);
                     control += tensionSolver.ComputeTensionCorrectionBalanced(Leader, mav, offsets);
 
-                    MAVLink.mavlink_set_attitude_target_t att_target = new();
+                    MAVLink.mavlink_set_attitude_target_t att_target = new MAVLink.mavlink_set_attitude_target_t();
                     att_target.target_system = mav.sysid;
                     att_target.target_component = mav.compid;
                     att_target.type_mask = 0b00000100;
