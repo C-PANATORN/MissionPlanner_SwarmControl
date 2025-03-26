@@ -139,9 +139,35 @@ namespace MissionPlanner.Swarm
                             if (dist < minSeparation && dist > 0.000001f)
                             {
                                 float strength = avoidanceGain / (dist * dist);
-                                avoidance += rel.Normalize() * strength;
+                                avoidance += NormalizeVector(rel) * strength;
                             }
                         }
+                    }
+
+                    if (!timestamps.ContainsKey(mav)) timestamps[mav] = DateTime.UtcNow;
+                    float dt = (float)(DateTime.UtcNow - timestamps[mav]).TotalSeconds;
+                    timestamps[mav] = DateTime.UtcNow;
+
+                    Vector3 control = controllers[mav].ComputeControl(posError, velError, dt);
+                    control += avoidance;
+                    control += attitudeController.CompensateRigidBodyDynamics(Leader, mav, offsets);
+                    control += tensionSolver.ComputeTensionCorrectionBalanced(Leader, mav, offsets);
+
+                    MAVLink.mavlink_set_attitude_target_t att_target = new MAVLink.mavlink_set_attitude_target_t();
+                    att_target.target_system = mav.sysid;
+                    att_target.target_component = mav.compid;
+                    att_target.type_mask = 0b00000100;
+
+                    double verticalThrust = control.z + GRAVITY;
+                    att_target.thrust = (float)MathHelper.constrain(verticalThrust / MAX_THRUST_N, 0.1, 1);
+
+                    Quaternion q = Quaternion.from_euler312(control.x * MathHelper.deg2rad, control.y * MathHelper.deg2rad, 0);
+                    att_target.q = new float[4] { (float)q.q1, (float)q.q2, (float)q.q3, (float)q.q4 };
+
+                    port.sendPacket(att_target, mav.sysid, mav.compid);
+                }
+            }
+        }
                     }
 
                     if (!timestamps.ContainsKey(mav)) timestamps[mav] = DateTime.UtcNow;
