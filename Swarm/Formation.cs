@@ -135,7 +135,7 @@ namespace MissionPlanner.Swarm
                                 continue;
 
                             Vector3 rel = new Vector3((float)(mav.cs.lat - other.cs.lat), (float)(mav.cs.lng - other.cs.lng), (float)(mav.cs.alt - other.cs.alt));
-                            float dist = rel.Length;
+                            float dist = (float)Math.Sqrt(rel.x * rel.x + rel.y * rel.y + rel.z * rel.z);
                             if (dist < minSeparation && dist > 0.000001f)
                             {
                                 float strength = avoidanceGain / (dist * dist);
@@ -144,27 +144,7 @@ namespace MissionPlanner.Swarm
                         }
                     }
 
-                    if (!timestamps.ContainsKey(mav)) timestamps[mav] = DateTime.UtcNow;
-                    float dt = (float)(DateTime.UtcNow - timestamps[mav]).TotalSeconds;
-                    timestamps[mav] = DateTime.UtcNow;
-
-                    Vector3 control = controllers[mav].ComputeControl(posError, velError, dt);
-                    control += avoidance;
-                    control += attitudeController.CompensateRigidBodyDynamics(Leader, mav, offsets);
-                    control += tensionSolver.ComputeTensionCorrectionBalanced(Leader, mav, offsets);
-
-                    MAVLink.mavlink_set_attitude_target_t att_target = new MAVLink.mavlink_set_attitude_target_t();
-                    att_target.target_system = mav.sysid;
-                    att_target.target_component = mav.compid;
-                    att_target.type_mask = 0b00000100;
-
-                    double verticalThrust = control.z + GRAVITY;
-                    att_target.thrust = (float)MathHelper.constrain(verticalThrust / MAX_THRUST_N, 0.1, 1);
-
-                    Quaternion q = Quaternion.from_euler312(control.x * MathHelper.deg2rad, control.y * MathHelper.deg2rad, 0);
-                    att_target.q = new float[4] { (float)q.q1, (float)q.q2, (float)q.q3, (float)q.q4 };
-
-                    port.sendPacket(att_target, mav.sysid, mav.compid);
+                    // Duplicate block removed
                 }
             }
         }
@@ -193,8 +173,8 @@ namespace MissionPlanner.Swarm
 
                     port.sendPacket(att_target, mav.sysid, mav.compid);
                 }
+                            }
             }
-        }
         }
 
     public class AdaptiveFormationController
@@ -324,7 +304,7 @@ namespace MissionPlanner.Swarm
             for (int i = 0; i < n; i++)
             {
                 var r = attachmentPoints[i];
-                var qi = Vector3.Normalize(r);
+                var qi = NormalizeVector(r);
                 Phi[0, i] = qi.x; Phi[1, i] = qi.y; Phi[2, i] = qi.z;
                 Phi[3, i] = r.y * qi.z - r.z * qi.y;
                 Phi[4, i] = r.z * qi.x - r.x * qi.z;
@@ -340,7 +320,7 @@ namespace MissionPlanner.Swarm
             int idx = new List<MAVState>(offsets.Keys).IndexOf(follower);
             if (idx >= 0 && idx < T.Count)
             {
-                var qi = Vector3.Normalize(offsets[follower]);
+                var qi = NormalizeVector(offsets[follower]);
                 return qi * (float)Math.Max(0, T[idx]);
             }
 
