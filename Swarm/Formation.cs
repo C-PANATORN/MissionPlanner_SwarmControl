@@ -1,31 +1,66 @@
 ﻿using MissionPlanner.ArduPilot;
 using MissionPlanner.Utilities;
-using ProjNet.CoordinateSystems;
-using ProjNet.CoordinateSystems.Transformations;
 using System;
 using System.Collections.Generic;
+using MathNet.Numerics.LinearAlgebra;
+using ProjNet.CoordinateSystems;
+using ProjNet.CoordinateSystems.Transformations;
 using GeoAPI.CoordinateSystems;
 using GeoAPI.CoordinateSystems.Transformations;
 using Vector3 = MissionPlanner.Utilities.Vector3;
 
 namespace MissionPlanner.Swarm
 {
+    // Global swarm constants.
+    public static class SwarmConstants
+    {
+        public const float DEFAULT_LEADER_MASS = 1.0f;
+    }
+
     /// <summary>
-    /// Formation control using a leader and two followers that snap into
-    /// an equilateral triangle formation (4 m side length) without intersecting paths.
+    /// Formation controller that follows a leader.
+    /// This version uses the original formation logic with coordinate transformation,
+    /// and implements adaptive control and rigid-body load compensation via the 
+    /// AdaptiveFormationController and LoadAttitudeController.
     /// </summary>
     class Formation : Swarm
     {
-        // Dictionary for PID controllers per MAV.
-        private Dictionary<MAVState, Tuple<PID, PID, PID, PID>> pids =
-            new Dictionary<MAVState, Tuple<PID, PID, PID, PID>>();
+        // Dictionary of formation offsets (per MAV).
+        Dictionary<MAVState, Vector3> offsets = new Dictionary<MAVState, Vector3>();
 
-        // Latest known leader position.
+        // Adaptive control and timing for each follower.
+        private Dictionary<MAVState, AdaptiveFormationController> controllers = 
+            new Dictionary<MAVState, AdaptiveFormationController>();
+        private Dictionary<MAVState, DateTime> timestamps = 
+            new Dictionary<MAVState, DateTime>();
+
         private PointLatLngAlt masterpos = new PointLatLngAlt();
 
-        // Coordinate transformation helpers.
+        // Coordinate transformation objects.
         CoordinateTransformationFactory ctfac = new CoordinateTransformationFactory();
         IGeographicCoordinateSystem wgs84 = GeographicCoordinateSystem.WGS84;
+
+        // Load attitude controller instance.
+        private LoadAttitudeController attitudeController = new LoadAttitudeController();
+
+        /// <summary>
+        /// Sets the formation offset for a given MAV.
+        /// </summary>
+        public void setOffsets(MAVState mav, double x, double y, double z)
+        {
+            offsets[mav] = new Vector3((float)x, (float)y, (float)z);
+            log.Info(mav.ToString() + " " + offsets[mav].ToString());
+        }
+
+        /// <summary>
+        /// Retrieves the formation offset for a given MAV.
+        /// </summary>
+        public Vector3 getOffsets(MAVState mav)
+        {
+            if (offsets.ContainsKey(mav))
+                return offsets[mav];
+            return new Vector3(offsets.Count, 0, 0);
+        }
 
         public override void Update()
         {
@@ -38,6 +73,7 @@ namespace MissionPlanner.Swarm
             masterpos = new PointLatLngAlt(Leader.cs.lat, Leader.cs.lng, Leader.cs.alt, "");
         }
 
+        // Helper to wrap an angle between -180 and 180 degrees.
         double wrap_180(double input)
         {
             if (input > 180)
@@ -47,22 +83,18 @@ namespace MissionPlanner.Swarm
             return input;
         }
 
-        /// <summary>
-        /// Send command for formation control.
-        /// For exactly two followers, we use fixed formation offsets so that:
-        /// - The leader is the front vertex,
-        /// - Followers are positioned at the base of the equilateral triangle (side = 4 m).
-        /// In the leader’s local frame (x: forward, y: right), the two offsets are:
-        /// Left follower: (-3.464, -2, 0)
-        /// Right follower: (-3.464,  2, 0)
-        /// </summary>
         public override void SendCommand()
         {
             if (masterpos.Lat == 0 || masterpos.Lng == 0)
                 return;
 
-            // Counter for assigning fixed formation positions to followers.
-            int followerIndex = 0;
+            // Compute UTM transformation based on the leader's position.
+            int utmzone = (int)((masterpos.Lng - -186.0) / 6.0);
+            IProjectedCoordinateSystem utm = ProjectedCoordinateSystem.WGS84_UTM(utmzone, masterpos.Lat >= 0);
+            ICoordinateTransformation trans = ctfac.CreateFromCoordinateSystems(wgs84, utm);
+
+            // Convert leader's GPS to UTM once.
+            double[] pLeaderBase = trans.MathTransform.Transform(new double[] { Leader.cs.lng, Leader.cs.lat });
 
             foreach (var port in MainV2.Comports.ToArray())
             {
@@ -71,191 +103,94 @@ namespace MissionPlanner.Swarm
                     if (mav == Leader)
                         continue;
 
-                    // Compute formation offset regardless of any previous settings.
-                    // In the leader's body frame:
-                    //   x: forward (negative means behind the leader)
-                    //   y: lateral (negative is left if leader's right is positive)
-                    Vector3 formationOffset;
-                    if (followerIndex == 0)
-                    {
-                        // Left follower offset: behind by 3.464 m and 2 m to the left.
-                        formationOffset = new Vector3(-3.464, -2.0, 0);
-                    }
-                    else if (followerIndex == 1)
-                    {
-                        // Right follower offset: behind by 3.464 m and 2 m to the right.
-                        formationOffset = new Vector3(-3.464, 2.0, 0);
-                    }
-                    else
-                    {
-                        // Fallback: if more than two followers, assign a default offset.
-                        formationOffset = new Vector3(-3.464, 0, 0);
-                    }
-                    followerIndex++;
+                    // Compute desired follower target in UTM coordinates.
+                    Vector3 offset = getOffsets(mav);
+                    double heading = -Leader.cs.yaw * MathHelper.deg2rad;
+                    double dx = offset.x * Math.Cos(heading) - offset.y * Math.Sin(heading);
+                    double dy = offset.x * Math.Sin(heading) + offset.y * Math.Cos(heading);
 
-                    // Start with leader's position as target.
-                    PointLatLngAlt target = new PointLatLngAlt(masterpos);
+                    double[] pLeader = new double[2];
+                    pLeader[0] = pLeaderBase[0] + dx;
+                    pLeader[1] = pLeaderBase[1] + dy;
 
+                    // Convert follower's current GPS position to UTM.
+                    double[] pFollower;
                     try
                     {
-                        // Convert leader position (WGS84) to UTM.
-                        int utmzone = (int)((masterpos.Lng - -186.0) / 6.0);
-                        IProjectedCoordinateSystem utm = ProjectedCoordinateSystem.WGS84_UTM(
-                            utmzone, masterpos.Lat < 0 ? false : true);
-                        ICoordinateTransformation trans = ctfac.CreateFromCoordinateSystems(wgs84, utm);
-
-                        double[] pll1 = { target.Lng, target.Lat };
-                        double[] p1 = trans.MathTransform.Transform(pll1);
-
-                        // Calculate heading (note: heading is the negative of leader yaw).
-                        double heading = -Leader.cs.yaw;
-
-                        // Apply formation offset in UTM space.
-                        p1[0] += formationOffset.x * Math.Cos(heading * MathHelper.deg2rad) -
-                                 formationOffset.y * Math.Sin(heading * MathHelper.deg2rad);
-                        p1[1] += formationOffset.x * Math.Sin(heading * MathHelper.deg2rad) +
-                                 formationOffset.y * Math.Cos(heading * MathHelper.deg2rad);
-
-                        // Convert back from UTM to WGS84.
-                        IMathTransform inverseTransform = trans.MathTransform.Inverse();
-                        double[] point = inverseTransform.Transform(p1);
-                        target.Lat = point[1];
-                        target.Lng = point[0];
-                        target.Alt += formationOffset.z;
-
-                        // --- Send commands based on firmware type ---
-                        if (mav.cs.firmware == Firmwares.ArduPlane)
-                        {
-                            // Calculate distance and bearing to target.
-                            var dist = target.GetDistance(mav.cs.Location);
-                            var targyaw = mav.cs.Location.GetBearing(target);
-                            // Create trailer and leader target positions to avoid intersecting trajectories.
-                            var targettrailer = target.newpos(Leader.cs.yaw, Math.Abs(dist) * -0.25);
-                            var targetleader = target.newpos(Leader.cs.yaw, 10 + dist);
-                            var yawerror = wrap_180(targyaw - mav.cs.yaw);
-
-                            if (dist < 100)
-                            {
-                                targyaw = mav.cs.Location.GetBearing(targetleader);
-                                yawerror = wrap_180(targyaw - mav.cs.yaw);
-                                var targBearing = mav.cs.Location.GetBearing(target);
-                                if (Math.Abs(wrap_180(targBearing - targyaw)) > 45)
-                                    dist *= -1;
-                            }
-                            else
-                            {
-                                targyaw = mav.cs.Location.GetBearing(targettrailer);
-                                yawerror = wrap_180(targyaw - mav.cs.yaw);
-                            }
-
-                            // Update guided mode position.
-                            mav.GuidedMode.x = (int)(target.Lat * 1e7);
-                            mav.GuidedMode.y = (int)(target.Lng * 1e7);
-                            mav.GuidedMode.z = (float)target.Alt;
-
-                            MAVLink.mavlink_set_attitude_target_t att_target = new MAVLink.mavlink_set_attitude_target_t();
-                            att_target.target_system = mav.sysid;
-                            att_target.target_component = mav.compid;
-                            att_target.type_mask = 0xff;
-
-                            Tuple<PID, PID, PID, PID> pid;
-                            if (pids.ContainsKey(mav))
-                            {
-                                pid = pids[mav];
-                            }
-                            else
-                            {
-                                pid = new Tuple<PID, PID, PID, PID>(
-                                    new PID(1f, 0.03f, 0.02f, 10, 20, 0.1f, 0),
-                                    new PID(1f, 0.03f, 0.02f, 10, 20, 0.1f, 0),
-                                    new PID(1f, 0f, 0.00f, 15, 20, 0.1f, 0),
-                                    new PID(0.01f, 0.001f, 0f, 0.5f, 20, 0.1f, 0));
-                                pids.Add(mav, pid);
-                            }
-
-                            var rollp = pid.Item1;
-                            var pitchp = pid.Item2;
-                            var yawp = pid.Item3;
-                            var thrustp = pid.Item4;
-                            double newroll = 0d;
-                            double newpitch = 0d;
-
-                            // Altitude control.
-                            var altdelta = target.Alt - mav.cs.alt;
-                            newpitch = altdelta;
-                            att_target.type_mask -= 0b00000010;
-                            pitchp.set_input_filter_all((float)altdelta);
-                            newpitch = pitchp.get_pid();
-
-                            // Roll control.
-                            var leaderturnrad = CurrentState.fromDistDisplayUnit(Leader.cs.radius);
-                            var mavturnradius = leaderturnrad;
-                            var distToTarget = mav.cs.Location.GetDistance(target);
-                            var bearingToTarget = mav.cs.Location.GetBearing(target);
-                            if (distToTarget < 30)
-                                bearingToTarget = mav.cs.Location.GetBearing(targetleader);
-                            if (distToTarget > 100)
-                                bearingToTarget = mav.cs.Location.GetBearing(targettrailer);
-                            var bearingDelta = wrap_180(bearingToTarget - mav.cs.yaw);
-                            double tangent90 = bearingDelta > 0 ? 90 : -90;
-                            if (Math.Abs(bearingDelta) < 85)
-                            {
-                                double insideAngle = Math.Abs(tangent90 - bearingDelta);
-                                double angleCenter = 180 - insideAngle * 2;
-                                double sine1 = Math.Max(distToTarget, 40) / Math.Sin(angleCenter * MathHelper.deg2rad);
-                                double radius = sine1 * Math.Sin(insideAngle * MathHelper.deg2rad);
-                                radius = (Math.Abs(radius) + Math.Abs(mavturnradius)) / 2;
-                                double angleBank = ((mav.cs.groundspeed * mav.cs.groundspeed) / radius) / 9.8;
-                                angleBank *= MathHelper.rad2deg;
-                                newroll = (bearingDelta > 0) ? Math.Abs(angleBank) : -Math.Abs(angleBank);
-                            }
-                            newroll += MathHelper.constrain(bearingDelta, -20, 20);
-
-                            // Thrust control.
-                            att_target.type_mask -= 0b01000000;
-                            thrustp.set_input_filter_all((float)distToTarget);
-                            if (distToTarget > 40)
-                                thrustp.reset_I();
-                            att_target.thrust = (float)MathHelper.constrain(thrustp.get_pid(), 0.1, 1);
-
-                            Quaternion q = Quaternion.from_euler312(newroll * MathHelper.deg2rad,
-                                newpitch * MathHelper.deg2rad, yawerror * MathHelper.deg2rad);
-                            att_target.q = new float[4];
-                            att_target.q[0] = (float)q.q1;
-                            att_target.q[1] = (float)q.q2;
-                            att_target.q[2] = (float)q.q3;
-                            att_target.q[3] = (float)q.q4;
-                            att_target.type_mask -= 0b10000101;
-
-                            Console.WriteLine("sysid {0} - {1} dist {2} r {3} p {4} y {5}",
-                                mav.sysid, att_target.thrust, distToTarget, newroll, newpitch, (targyaw - mav.cs.yaw));
-
-                            port.sendPacket(att_target, mav.sysid, mav.compid);
-                        }
-                        else
-                        {
-                            // For firmwares other than ArduPlane, set the position target and yaw.
-                            Vector3 vel = new Vector3(Leader.cs.vx, Leader.cs.vy, Leader.cs.vz);
-                            port.setPositionTargetGlobalInt(mav.sysid, mav.compid, true, true, false, false,
-                                MAVLink.MAV_FRAME.GLOBAL_RELATIVE_ALT_INT, target.Lat, target.Lng, target.Alt,
-                                vel.x, vel.y, vel.z, 0, 0);
-
-                            if (!gimbal)
-                            {
-                                if (Math.Abs(mav.cs.yaw - Leader.cs.yaw) > 3)
-                                    port.doCommand(mav.sysid, mav.compid, MAVLink.MAV_CMD.CONDITION_YAW,
-                                        Leader.cs.yaw, 100.0f, 0, 0, 0, 0, 0, false);
-                            }
-                            else
-                            {
-                                if (Math.Abs(mav.cs.yaw - Leader.cs.yaw) > 3)
-                                    port.setMountControl(mav.sysid, mav.compid, 45, 0, Leader.cs.yaw, false);
-                            }
-                        }
+                        pFollower = trans.MathTransform.Transform(new double[] { mav.cs.lng, mav.cs.lat });
                     }
                     catch (Exception ex)
                     {
-                        Console.WriteLine("Failed to send command for " + mav.ToString() + "\n" + ex.ToString());
+                        Console.WriteLine("Failed to transform follower position for " + mav.ToString() + "\n" + ex.ToString());
+                        continue;
+                    }
+
+                    // Desired UTM position and velocity.
+                    Vector3 desiredPosition = new Vector3((float)pLeader[0], (float)pLeader[1], (float)(Leader.cs.alt + offset.z));
+                    Vector3 desiredVelocity = new Vector3((float)Leader.cs.vx, (float)Leader.cs.vy, (float)Leader.cs.vz);
+
+                    // Follower's current UTM position.
+                    Vector3 followerPos = new Vector3((float)pFollower[0], (float)pFollower[1], (float)mav.cs.alt);
+
+                    // Compute position and velocity errors.
+                    Vector3 posError = desiredPosition - followerPos;
+                    Vector3 velError = desiredVelocity - new Vector3((float)mav.cs.vx, (float)mav.cs.vy, (float)mav.cs.vz);
+
+                    // Compute time step.
+                    if (!timestamps.ContainsKey(mav))
+                        timestamps[mav] = DateTime.UtcNow;
+                    float dt = (float)(DateTime.UtcNow - timestamps[mav]).TotalSeconds;
+                    timestamps[mav] = DateTime.UtcNow;
+
+                    // For ArduPlane, use adaptive control and load attitude compensation.
+                    if (mav.cs.firmware == Firmwares.ArduPlane)
+                    {
+                        if (!controllers.ContainsKey(mav))
+                            controllers[mav] = new AdaptiveFormationController();
+
+                        Vector3 control = controllers[mav].ComputeControl(posError, velError, dt);
+                        control += attitudeController.CompensateRigidBodyDynamics(Leader, mav, offsets);
+
+                        // Compute vertical thrust (with gravity compensation).
+                        const float GRAVITY = 9.81f;
+                        const float UAV_MASS_KG = 0.7f;
+                        const float MAX_THRUST_N = UAV_MASS_KG * GRAVITY * 3.0f;
+                        double verticalThrust = control.z + GRAVITY;
+                        float thrustCommand = (float)MathHelper.constrain(verticalThrust / MAX_THRUST_N, 0.1, 1);
+
+                        // Create a quaternion from roll (control.x) and pitch (control.y); yaw is set to 0.
+                        Quaternion q = Quaternion.from_euler312(control.x * MathHelper.deg2rad,
+                                                                  control.y * MathHelper.deg2rad,
+                                                                  0);
+                        MAVLink.mavlink_set_attitude_target_t att_target = new MAVLink.mavlink_set_attitude_target_t();
+                        att_target.target_system = mav.sysid;
+                        att_target.target_component = mav.compid;
+                        att_target.type_mask = 0b00000100; // Only thrust and attitude are controlled.
+                        att_target.thrust = thrustCommand;
+                        att_target.q = new float[4] { (float)q.q1, (float)q.q2, (float)q.q3, (float)q.q4 };
+
+                        port.sendPacket(att_target, mav.sysid, mav.compid);
+                    }
+                    else
+                    {
+                        // For non-ArduPlane firmwares, use the original position/velocity target approach.
+                        Vector3 vel = new Vector3(Leader.cs.vx, Leader.cs.vy, Leader.cs.vz);
+                        port.setPositionTargetGlobalInt(mav.sysid, mav.compid, true,
+                            true, false, false,
+                            MAVLink.MAV_FRAME.GLOBAL_RELATIVE_ALT_INT, desiredPosition.x, desiredPosition.y, desiredPosition.z,
+                            vel.x, vel.y, vel.z, 0, 0);
+
+                        if (!gimbal)
+                        {
+                            if (Math.Abs(mav.cs.yaw - Leader.cs.yaw) > 3)
+                                port.doCommand(mav.sysid, mav.compid, MAVLink.MAV_CMD.CONDITION_YAW, Leader.cs.yaw,
+                                    100.0f, 0, 0, 0, 0, 0, false);
+                        }
+                        else
+                        {
+                            if (Math.Abs(mav.cs.yaw - Leader.cs.yaw) > 3)
+                                port.setMountControl(mav.sysid, mav.compid, 45, 0, Leader.cs.yaw, false);
+                        }
                     }
                 }
             }
@@ -264,151 +199,121 @@ namespace MissionPlanner.Swarm
         public bool gimbal { get; set; }
     }
 
-    public class PID
+    // Adaptive controller that updates its gains based on position and velocity errors.
+    public class AdaptiveFormationController
     {
-        private float _dt;
-        private float M_2PI = (float)(Math.PI * 2);
-        private float _input;
-        private float _derivative;
-        private float _kp;
-        private float _ki;
-        private float _integrator;
-        private float _imax;
-        private float _kd;
-        private float _ff;
-        private float _filt_hz = AC_PID_FILT_HZ_DEFAULT;
+        private Matrix<double> Kp = Matrix<double>.Build.DenseIdentity(3);
+        private Matrix<double> Kv = Matrix<double>.Build.DenseIdentity(3);
+        private readonly double sigma = 0.02;
+        private readonly double gammaP = 0.05;
+        private readonly double gammaV = 0.05;
 
-        const float AC_PID_FILT_HZ_DEFAULT = 20.0f;
-        const float AC_PID_FILT_HZ_MIN = 0.01f;
-
-        public PID(float initial_p, float initial_i, float initial_d, float initial_imax, float initial_filt_hz, float dt, float initial_ff)
+        public Vector3 ComputeControl(Vector3 posError, Vector3 velError, float dt)
         {
-            _dt = dt;
-            _integrator = 0.0f;
-            _input = 0.0f;
-            _derivative = 0.0f;
-            _kp = initial_p;
-            _ki = initial_i;
-            _kd = initial_d;
-            _imax = Math.Abs(initial_imax);
-            filt_hz(initial_filt_hz);
-            _ff = initial_ff;
-            _flags._reset_filter = true;
+            var xi = Vector<double>.Build.DenseOfArray(new double[] { posError.x, posError.y, posError.z });
+            var zeta = Vector<double>.Build.DenseOfArray(new double[] { velError.x, velError.y, velError.z });
+
+            var KpDot = -sigma * (Kp - Matrix<double>.Build.DenseIdentity(3)) +
+                        gammaP * xi.ToColumnMatrix() * xi.ToRowMatrix();
+            var KvDot = -sigma * (Kv - Matrix<double>.Build.DenseIdentity(3)) +
+                        gammaV * zeta.ToColumnMatrix() * zeta.ToRowMatrix();
+
+            Kp += KpDot * dt;
+            Kv += KvDot * dt;
+
+            Kp = Kp.Map(x => MathHelper.constrain(x, 0.5, 5.0));
+            Kv = Kv.Map(x => MathHelper.constrain(x, 0.5, 5.0));
+
+            var control = -(Kp * xi + Kv * zeta);
+            return new Vector3((float)control[0], (float)control[1], (float)control[2]);
         }
+    }
 
-        public void set_dt(float dt)
+    // Controller that compensates for rigid-body load dynamics.
+    public class LoadAttitudeController
+    {
+        public Vector3 CompensateRigidBodyDynamics(MAVState leader, MAVState follower, Dictionary<MAVState, Vector3> offsets)
         {
-            _dt = dt;
-        }
+            if (!offsets.ContainsKey(follower))
+                return Vector3.Zero;
 
-        public void filt_hz(float hz)
-        {
-            _filt_hz = hz;
-            _filt_hz = Math.Max(_filt_hz, AC_PID_FILT_HZ_MIN);
-        }
+            var attachmentPoints = new List<Vector3>(offsets.Values);
+            int n = attachmentPoints.Count;
+            if (n < 3)
+                return Vector3.Zero;
 
-        public void set_input_filter_all(float input)
-        {
-            if (!isfinite(input))
+            float leaderMass = SwarmConstants.DEFAULT_LEADER_MASS;
+            var F = Vector<double>.Build.DenseOfArray(new double[]
             {
-                return;
-            }
-            if (_flags._reset_filter)
+                leader.cs.ax,
+                leader.cs.ay,
+                (leader.cs.az + 9.81f) * leaderMass
+            });
+
+            var Tau = Vector<double>.Build.DenseOfArray(new double[] { 0.0, 0.0, 0.0 });
+            var W = Vector<double>.Build.Dense(6);
+            for (int i = 0; i < 3; i++)
+                W[i] = F[i];
+            for (int i = 0; i < 3; i++)
+                W[i + 3] = Tau[i];
+
+            var Phi = Matrix<double>.Build.Dense(6, n);
+            for (int i = 0; i < n; i++)
             {
-                _flags._reset_filter = false;
-                _input = input;
-                _derivative = 0.0f;
+                var r = attachmentPoints[i];
+                var qi = VectorUtils.NormalizeVector(r);
+                Phi[0, i] = qi.x;
+                Phi[1, i] = qi.y;
+                Phi[2, i] = qi.z;
+                Phi[3, i] = r.y * qi.z - r.z * qi.y;
+                Phi[4, i] = r.z * qi.x - r.x * qi.z;
+                Phi[5, i] = r.x * qi.y - r.y * qi.x;
             }
-            float input_filt_change = get_filt_alpha() * (input - _input);
-            _input = _input + input_filt_change;
-            if (_dt > 0.0f)
+
+            var PhiPlus = Phi.PseudoInverse();
+            var T = PhiPlus * W;
+            int idx = new List<MAVState>(offsets.Keys).IndexOf(follower);
+            if (idx >= 0 && idx < T.Count)
             {
-                _derivative = input_filt_change / _dt;
+                var qi = VectorUtils.NormalizeVector(attachmentPoints[idx]);
+                float ti = Math.Max(0, (float)T[idx]);
+                return qi * ti;
             }
+            return Vector3.Zero;
         }
+    }
 
-        private bool isfinite(float input)
+    // Utility class for vector normalization.
+    public static class VectorUtils
+    {
+        public static Vector3 NormalizeVector(Vector3 v)
         {
-            return !float.IsInfinity(input);
+            double length = Math.Sqrt(v.x * v.x + v.y * v.y + v.z * v.z);
+            if (length == 0)
+                return new Vector3(0, 0, 0);
+            return new Vector3((float)(v.x / length), (float)(v.y / length), (float)(v.z / length));
         }
 
-        public float get_p()
+        public static Vector3 NormalizeVector(float[] v)
         {
-            _pid_info.P = (_input * _kp);
-            return _pid_info.P;
+            double length = Math.Sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
+            if (length == 0)
+                return new Vector3(0, 0, 0);
+            return new Vector3((float)(v[0] / length), (float)(v[1] / length), (float)(v[2] / length));
         }
 
-        public float get_i()
+        public static Vector3 NormalizeVector(int[] v)
         {
-            if (!is_zero(_ki) && !is_zero(_dt))
-            {
-                _integrator += ((float)_input * _ki) * _dt;
-                if (_integrator < -_imax)
-                    _integrator = -_imax;
-                else if (_integrator > _imax)
-                    _integrator = _imax;
-
-                _pid_info.I = _integrator;
-                return _integrator;
-            }
-            return 0;
+            double[] doubleArray = Array.ConvertAll(v, item => (double)item);
+            return NormalizeVector(doubleArray);
         }
 
-        public float get_d()
+        public static Vector3 NormalizeVector(double[] v)
         {
-            _pid_info.D = (_kd * _derivative);
-            return _pid_info.D;
+            double length = Math.Sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
+            if (length == 0)
+                return new Vector3(0, 0, 0);
+            return new Vector3((float)(v[0] / length), (float)(v[1] / length), (float)(v[2] / length));
         }
-
-        public float get_ff(float requested_rate)
-        {
-            _pid_info.FF = requested_rate * _ff;
-            return _pid_info.FF;
-        }
-
-        public float get_pi()
-        {
-            return get_p() + get_i();
-        }
-
-        public float get_pid()
-        {
-            return get_p() + get_i() + get_d();
-        }
-
-        public void reset_I()
-        {
-            _integrator = 0;
-        }
-
-        public float get_filt_alpha()
-        {
-            if (is_zero(_filt_hz))
-            {
-                return 1.0f;
-            }
-            float rc = 1 / (M_2PI * _filt_hz);
-            return _dt / (_dt + rc);
-        }
-
-        private bool is_zero(float value)
-        {
-            return value == 0;
-        }
-
-        internal class flags
-        {
-            internal bool _reset_filter;
-        }
-
-        flags _flags = new flags();
-        internal class pid_info
-        {
-            internal float P;
-            internal float I;
-            internal float D;
-            internal float FF;
-        }
-        pid_info _pid_info = new pid_info();
     }
 }
