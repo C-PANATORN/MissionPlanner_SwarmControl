@@ -258,6 +258,11 @@
       <HintPath>$(NuGetPackageRoot)\websocket4net\0.15.2\lib\netstandard1.3\WebSocket4Net.dll</HintPath>
     </Reference>
   </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="MathNet.Numerics" Version="5.0.0" />
+  </ItemGroup>
+
   <ItemGroup>
     <Compile Update="Controls\DroneCANSubscriber.cs">
       <SubType>UserControl</SubType>
