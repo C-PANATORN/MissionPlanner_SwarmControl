@@ -32,7 +32,7 @@ namespace MissionPlanner.Swarm
         private LoadAttitudeController attitudeController = new LoadAttitudeController();
         private TensionSolver tensionSolver = new TensionSolver();
         private float minSeparation = 0.00002f;
-        private float avoidanceGain = 0.0001f;
+        private float avoidanceGain = 0.000001f;
 
         public void setOffsets(MAVState mav, double x, double y, double z)
             => offsets[mav] = new Vector3((float)x, (float)y, (float)z);
