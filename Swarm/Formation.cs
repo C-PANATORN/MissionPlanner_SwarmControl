@@ -11,13 +11,18 @@ using Vector3 = MissionPlanner.Utilities.Vector3;
 
 namespace MissionPlanner.Swarm
 {
+    // Global swarm constants
+    public static class SwarmConstants
+    {
+        public const float DEFAULT_LEADER_MASS = 1.0f;
+    }
+
+    // Main formation class
     class Formation : Swarm
     {
         const float UAV_MASS_KG = 0.7f;
         const float GRAVITY = 9.81f;
-        // const float SPECIFIC_THRUST_KG_PER_WATT = 0.0036f; // Defined but unused
         const float MAX_THRUST_N = UAV_MASS_KG * GRAVITY * 3.0f; // 3x hover thrust (~20.6 N)
-        const float DEFAULT_LEADER_MASS = 1.0f;
 
         Dictionary<MAVState, Vector3> offsets = new Dictionary<MAVState, Vector3>();
         private Dictionary<MAVState, AdaptiveFormationController> controllers = new Dictionary<MAVState, AdaptiveFormationController>();
@@ -29,9 +34,15 @@ namespace MissionPlanner.Swarm
         private float minSeparation = 0.00005f;
         private float avoidanceGain = 0.0001f;
 
-        public void setOffsets(MAVState mav, double x, double y, double z) => offsets[mav] = new Vector3(x, y, z);
+        public void setOffsets(MAVState mav, double x, double y, double z)
+            => offsets[mav] = new Vector3((float)x, (float)y, (float)z);
 
-        public Vector3 getOffsets(MAVState mav) => offsets.ContainsKey(mav) ? offsets[mav] : new Vector3(offsets.Count, 0, 0);
+        public Vector3 getOffsets(MAVState mav)
+        {
+            if (offsets.ContainsKey(mav))
+                return offsets[mav];
+            return new Vector3((float)offsets.Count, 0, 0);
+        }
 
         public override void Update()
         {
@@ -51,13 +62,15 @@ namespace MissionPlanner.Swarm
             double[] pitchLoads = new double[n];
             for (int i = 0; i < n; i++)
             {
-                var f = followers[i];
-                pitchLoads[i] = Math.Abs(0) + Math.Abs(0);
+                // Replace with actual load calculations if needed.
+                pitchLoads[i] = 0.0;
             }
 
             double total = 0;
-            foreach (var l in pitchLoads) total += l;
-            if (total == 0) total = 1; // avoid division by zero
+            foreach (var l in pitchLoads)
+                total += l;
+            if (total == 0)
+                total = 1; // avoid division by zero
 
             double[] shares = new double[n];
             for (int i = 0; i < n; i++)
@@ -103,7 +116,7 @@ namespace MissionPlanner.Swarm
                     IGeographicCoordinateSystem wgs84 = GeographicCoordinateSystem.WGS84;
                     ICoordinateTransformation trans = ctfac.CreateFromCoordinateSystems(wgs84, utm);
 
-                    var pll = new[] { Leader.cs.lng, Leader.cs.lat };
+                    double[] pll = new double[] { Leader.cs.lng, Leader.cs.lat };
                     double[] pLeader;
                     try { pLeader = trans.MathTransform.Transform(pll); }
                     catch { return; }
@@ -116,7 +129,7 @@ namespace MissionPlanner.Swarm
                     pLeader[1] += dy;
 
                     double[] pFollower;
-                    try { pFollower = trans.MathTransform.Transform(new[] { mav.cs.lng, mav.cs.lat }); }
+                    try { pFollower = trans.MathTransform.Transform(new double[] { mav.cs.lng, mav.cs.lat }); }
                     catch { return; }
 
                     desiredPosition = new Vector3((float)pLeader[0], (float)pLeader[1], (float)(Leader.cs.alt + offset.z));
@@ -134,7 +147,10 @@ namespace MissionPlanner.Swarm
                             if (other == mav || other == Leader)
                                 continue;
 
-                            Vector3 rel = new Vector3((float)(mav.cs.lat - other.cs.lat), (float)(mav.cs.lng - other.cs.lng), (float)(mav.cs.alt - other.cs.alt));
+                            Vector3 rel = new Vector3(
+                                (float)(mav.cs.lat - other.cs.lat),
+                                (float)(mav.cs.lng - other.cs.lng),
+                                (float)(mav.cs.alt - other.cs.alt));
                             float dist = (float)Math.Sqrt(rel.x * rel.x + rel.y * rel.y + rel.z * rel.z);
                             if (dist < minSeparation && dist > 0.000001f)
                             {
@@ -144,10 +160,8 @@ namespace MissionPlanner.Swarm
                         }
                     }
 
-                    // Duplicate block removed
-                }
-            }
-         timestamps[mav] = DateTime.UtcNow;
+                    if (!timestamps.ContainsKey(mav))
+                        timestamps[mav] = DateTime.UtcNow;
                     float dt = (float)(DateTime.UtcNow - timestamps[mav]).TotalSeconds;
                     timestamps[mav] = DateTime.UtcNow;
 
@@ -161,122 +175,34 @@ namespace MissionPlanner.Swarm
                     att_target.target_component = mav.compid;
                     att_target.type_mask = 0b00000100;
 
-                    // Convert net vertical acceleration to thrust (add gravity)
                     double verticalThrust = control.z + GRAVITY;
                     att_target.thrust = (float)MathHelper.constrain(verticalThrust / MAX_THRUST_N, 0.1, 1);
 
-                    Quaternion q = Quaternion.from_euler312(control.x * MathHelper.deg2rad, control.y * MathHelper.deg2rad, 0);
+                    Quaternion q = Quaternion.from_euler312(
+                        control.x * MathHelper.deg2rad,
+                        control.y * MathHelper.deg2rad, 0);
                     att_target.q = new float[4] { (float)q.q1, (float)q.q2, (float)q.q3, (float)q.q4 };
 
                     port.sendPacket(att_target, mav.sysid, mav.compid);
-                                }
+                }
             }
-        }
-
-
-    public class AdaptiveFormationController
-    {
-        private Matrix<double> Kp = Matrix<double>.Build.DenseIdentity(3);
-        private Matrix<double> Kv = Matrix<double>.Build.DenseIdentity(3);
-        private readonly double sigma = 0.05;
-        private readonly double gammaP = 0.1;
-        private readonly double gammaV = 0.1;
-
-        public Vector3 ComputeControl(Vector3 posError, Vector3 velError, float dt)
-        {
-            var xi = Vector<double>.Build.DenseOfArray(new[] { (double)posError.x, posError.y, posError.z });
-            var zeta = Vector<double>.Build.DenseOfArray(new[] { (double)velError.x, velError.y, velError.z });
-
-            var KpDot = -sigma * (Kp - Matrix<double>.Build.DenseIdentity(3)) + gammaP * xi.ToColumnMatrix() * xi.ToRowMatrix();
-            var KvDot = -sigma * (Kv - Matrix<double>.Build.DenseIdentity(3)) + gammaV * zeta.ToColumnMatrix() * zeta.ToRowMatrix();
-
-            Kp += KpDot * dt;
-            Kv += KvDot * dt;
-
-            Kp = Kp.Map(x => MathHelper.constrain(x, 0.5, 5.0));
-            Kv = Kv.Map(x => MathHelper.constrain(x, 0.5, 5.0));
-
-            var control = -(Kp * xi + Kv * zeta);
-            return new Vector3((float)control[0], (float)control[1], (float)control[2]);
         }
     }
 
-    public class LoadAttitudeController
-    {
-        public Vector3 CompensateRigidBodyDynamics(MAVState leader, MAVState follower, Dictionary<MAVState, Vector3> offsets)
-        {
-            if (!offsets.ContainsKey(follower))
-                return Vector3.Zero;
-
-            var followers = new List<MAVState>(offsets.Keys);
-            var attachmentPoints = new List<Vector3>(offsets.Values);
-            int n = attachmentPoints.Count;
-            if (n < 3) return Vector3.Zero;
-
-            float leaderMass = DEFAULT_LEADER_MASS > 0 ? DEFAULT_LEADER_MASS : 1.0f;
-
-            var F = Vector<double>.Build.DenseOfArray(new[] {
-                leader.cs.ax * leaderMass,
-                leader.cs.ay * leaderMass,
-                (leader.cs.az + 9.81f) * leaderMass });
-
-            var Tau = Vector<double>.Build.DenseOfArray(new[] {
-                0,
-                0,
-                0 });
-
-            var W = Vector<double>.Build.Dense(6);
-            for (int i = 0; i < 3; i++) W[i] = F[i];
-            for (int i = 0; i < 3; i++) W[i + 3] = Tau[i];
-
-            var Phi = Matrix<double>.Build.Dense(6, n);
-            for (int i = 0; i < n; i++)
-            {
-                var r = attachmentPoints[i];
-                var qi = NormalizeVector(r);
-
-                Phi[0, i] = qi.x; Phi[1, i] = qi.y; Phi[2, i] = qi.z;
-                Phi[3, i] = r.y * qi.z - r.z * qi.y;
-                Phi[4, i] = r.z * qi.x - r.x * qi.z;
-                Phi[5, i] = r.x * qi.y - r.y * qi.x;
-            }
-
-            var PhiPlus = Phi.PseudoInverse();
-            var T = PhiPlus * W;
-            int idx = followers.IndexOf(follower);
-            if (idx >= 0 && idx < T.Count)
-            {
-                var qi = NormalizeVector(attachmentPoints[idx]);
-                float ti = Math.Max(0, (float)T[idx]);
-                return qi * ti;
-            }
-
-            return Vector3.Zero;
-        }
-    }
-
-    // Helper method to normalize Vector3 in C# 7.3
-    public static class VectorUtils
-    {
-        public static Vector3 NormalizeVector(Vector3 v)
-    {
-        var length = Math.Sqrt(v.x * v.x + v.y * v.y + v.z * v.z);
-        if (length == 0) return new Vector3(0, 0, 0);
-        return new Vector3((float)(v.x / length), (float)(v.y / length), (float)(v.z / length));
-    }
-
+    // TensionSolver implements a pseudoinverse-based approach to compute tension corrections.
     public class TensionSolver
     {
-        private Vector<double> Lambda;
+        private Vector<double> lambda;
 
         public TensionSolver()
         {
-            Lambda = Vector<double>.Build.Dense(3, 2.0);
+            // Initialize lambda vector. Adjust size if needed.
+            lambda = Vector<double>.Build.Dense(3, 2.0);
         }
 
         public void SetLambda(Vector<double> newLambda)
         {
-            Lambda = newLambda;
+            lambda = newLambda;
         }
 
         private Matrix<double> ComputeNullspace(Matrix<double> Phi)
@@ -287,10 +213,11 @@ namespace MissionPlanner.Swarm
 
         public Vector3 ComputeTensionCorrectionBalanced(MAVState leader, MAVState follower, Dictionary<MAVState, Vector3> offsets)
         {
-            var W = Vector<double>.Build.DenseOfArray(new[] {
+            var W = Vector<double>.Build.DenseOfArray(new double[]
+            {
                 leader.cs.ax,
                 leader.cs.ay,
-                leader.cs.az + 9.8f,
+                leader.cs.az + 9.81,
                 0,
                 0,
                 0
@@ -303,8 +230,10 @@ namespace MissionPlanner.Swarm
             for (int i = 0; i < n; i++)
             {
                 var r = attachmentPoints[i];
-                var qi = NormalizeVector(r);
-                Phi[0, i] = qi.x; Phi[1, i] = qi.y; Phi[2, i] = qi.z;
+                var qi = VectorUtils.NormalizeVector(r);
+                Phi[0, i] = qi.x;
+                Phi[1, i] = qi.y;
+                Phi[2, i] = qi.z;
                 Phi[3, i] = r.y * qi.z - r.z * qi.y;
                 Phi[4, i] = r.z * qi.x - r.x * qi.z;
                 Phi[5, i] = r.x * qi.y - r.y * qi.x;
@@ -313,17 +242,140 @@ namespace MissionPlanner.Swarm
             var PhiPlus = Phi.PseudoInverse();
             var N = ComputeNullspace(Phi);
             var T = PhiPlus * W;
-            if (N.ColumnCount == Lambda?.Count)
-                T += N * Lambda;
+
+            if (N.ColumnCount == lambda?.Count)
+                T += N * lambda;
 
             int idx = new List<MAVState>(offsets.Keys).IndexOf(follower);
             if (idx >= 0 && idx < T.Count)
             {
-                var qi = NormalizeVector(offsets[follower]);
-                return qi * (float)Math.Max(0, T[idx]);
+                var qi = VectorUtils.NormalizeVector(attachmentPoints[idx]);
+                float ti = Math.Max(0, (float)T[idx]);
+                return qi * ti;
             }
 
             return Vector3.Zero;
+        }
+    }
+
+    // AdaptiveFormationController adapts its gains based on position and velocity errors.
+    public class AdaptiveFormationController
+    {
+        private Matrix<double> Kp = Matrix<double>.Build.DenseIdentity(3);
+        private Matrix<double> Kv = Matrix<double>.Build.DenseIdentity(3);
+        private readonly double sigma = 0.05;
+        private readonly double gammaP = 0.1;
+        private readonly double gammaV = 0.1;
+
+        public Vector3 ComputeControl(Vector3 posError, Vector3 velError, float dt)
+        {
+            var xi = Vector<double>.Build.DenseOfArray(new double[] { posError.x, posError.y, posError.z });
+            var zeta = Vector<double>.Build.DenseOfArray(new double[] { velError.x, velError.y, velError.z });
+
+            var KpDot = -sigma * (Kp - Matrix<double>.Build.DenseIdentity(3)) +
+                        gammaP * xi.ToColumnMatrix() * xi.ToRowMatrix();
+            var KvDot = -sigma * (Kv - Matrix<double>.Build.DenseIdentity(3)) +
+                        gammaV * zeta.ToColumnMatrix() * zeta.ToRowMatrix();
+
+            Kp += KpDot * dt;
+            Kv += KvDot * dt;
+
+            Kp = Kp.Map(x => MathHelper.constrain(x, 0.5, 5.0));
+            Kv = Kv.Map(x => MathHelper.constrain(x, 0.5, 5.0));
+
+            var control = -(Kp * xi + Kv * zeta);
+            return new Vector3((float)control[0], (float)control[1], (float)control[2]);
+        }
+    }
+
+    // LoadAttitudeController compensates for the rigid-body load dynamics.
+    public class LoadAttitudeController
+    {
+        public Vector3 CompensateRigidBodyDynamics(MAVState leader, MAVState follower, Dictionary<MAVState, Vector3> offsets)
+        {
+            if (!offsets.ContainsKey(follower))
+                return Vector3.Zero;
+
+            var attachmentPoints = new List<Vector3>(offsets.Values);
+            int n = attachmentPoints.Count;
+            if (n < 3)
+                return Vector3.Zero;
+
+            float leaderMass = SwarmConstants.DEFAULT_LEADER_MASS;
+
+            var F = Vector<double>.Build.DenseOfArray(new double[]
+            {
+                leader.cs.ax * leaderMass,
+                leader.cs.ay * leaderMass,
+                (leader.cs.az + 9.81f) * leaderMass
+            });
+
+            var Tau = Vector<double>.Build.DenseOfArray(new double[] { 0.0, 0.0, 0.0 });
+
+            var W = Vector<double>.Build.Dense(6);
+            for (int i = 0; i < 3; i++)
+                W[i] = F[i];
+            for (int i = 0; i < 3; i++)
+                W[i + 3] = Tau[i];
+
+            var Phi = Matrix<double>.Build.Dense(6, n);
+            for (int i = 0; i < n; i++)
+            {
+                var r = attachmentPoints[i];
+                var qi = VectorUtils.NormalizeVector(r);
+                Phi[0, i] = qi.x;
+                Phi[1, i] = qi.y;
+                Phi[2, i] = qi.z;
+                Phi[3, i] = r.y * qi.z - r.z * qi.y;
+                Phi[4, i] = r.z * qi.x - r.x * qi.z;
+                Phi[5, i] = r.x * qi.y - r.y * qi.x;
+            }
+
+            var PhiPlus = Phi.PseudoInverse();
+            var T = PhiPlus * W;
+            int idx = new List<MAVState>(offsets.Keys).IndexOf(follower);
+            if (idx >= 0 && idx < T.Count)
+            {
+                var qi = VectorUtils.NormalizeVector(attachmentPoints[idx]);
+                float ti = Math.Max(0, (float)T[idx]);
+                return qi * ti;
+            }
+
+            return Vector3.Zero;
+        }
+    }
+
+    // Helper functions for normalizing vectors.
+    public static class VectorUtils
+    {
+        public static Vector3 NormalizeVector(Vector3 v)
+        {
+            var length = Math.Sqrt(v.x * v.x + v.y * v.y + v.z * v.z);
+            if (length == 0)
+                return new Vector3(0, 0, 0);
+            return new Vector3((float)(v.x / length), (float)(v.y / length), (float)(v.z / length));
+        }
+
+        public static Vector3 NormalizeVector(float[] v)
+        {
+            double length = Math.Sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
+            if (length == 0)
+                return new Vector3(0, 0, 0);
+            return new Vector3((float)(v[0] / length), (float)(v[1] / length), (float)(v[2] / length));
+        }
+
+        public static Vector3 NormalizeVector(int[] v)
+        {
+            double[] doubleArray = Array.ConvertAll(v, item => (double)item);
+            return NormalizeVector(doubleArray);
+        }
+
+        public static Vector3 NormalizeVector(double[] v)
+        {
+            double length = Math.Sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
+            if (length == 0)
+                return new Vector3(0, 0, 0);
+            return new Vector3((float)(v[0] / length), (float)(v[1] / length), (float)(v[2] / length));
         }
     }
 }
