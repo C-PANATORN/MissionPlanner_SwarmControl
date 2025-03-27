@@ -1,379 +1,24 @@
-﻿using System;
+﻿using MissionPlanner.ArduPilot;
+using MissionPlanner.Utilities;
+using ProjNet.CoordinateSystems;
+using ProjNet.CoordinateSystems.Transformations;
+using System;
 using System.Collections.Generic;
-
-namespace MissionPlanner.Utilities
-{
-    // Minimal Vector2 class.
-    public class Vector2
-    {
-        public float x, y;
-        public Vector2(float x, float y)
-        {
-            this.x = x;
-            this.y = y;
-        }
-        public static Vector2 operator +(Vector2 a, Vector2 b) 
-            => new Vector2(a.x + b.x, a.y + b.y);
-        public static Vector2 operator -(Vector2 a, Vector2 b) 
-            => new Vector2(a.x - b.x, a.y - b.y);
-        public static Vector2 operator /(Vector2 a, float d) 
-            => new Vector2(a.x / d, a.y / d);
-    }
-
-    // Minimal Vector3 class.
-    public class Vector3
-    {
-        public float x, y, z;
-        public Vector3(float x, float y, float z)
-        {
-            this.x = x;
-            this.y = y;
-            this.z = z;
-        }
-        public static Vector3 Zero => new Vector3(0f, 0f, 0f);
-        public static Vector3 operator +(Vector3 a, Vector3 b) 
-            => new Vector3(a.x + b.x, a.y + b.y, a.z + b.z);
-        public static Vector3 operator -(Vector3 a, Vector3 b) 
-            => new Vector3(a.x - b.x, a.y - b.y, a.z - b.z);
-        public static Vector3 operator *(float d, Vector3 a) 
-            => new Vector3(a.x * d, a.y * d, a.z * d);
-        public static Vector3 operator *(Vector3 a, float d) 
-            => new Vector3(a.x * d, a.y * d, a.z * d);
-        public static float Dot(Vector3 a, Vector3 b) 
-            => a.x * b.x + a.y * b.y + a.z * b.z;
-
-        // Cross product.
-        public static Vector3 Cross(Vector3 a, Vector3 b)
-        {
-            return new Vector3(
-                a.y * b.z - a.z * b.y,
-                a.z * b.x - a.x * b.z,
-                a.x * b.y - a.y * b.x
-            );
-        }
-    }
-
-    // Minimal PointLatLngAlt class.
-    public class PointLatLngAlt
-    {
-        public double Lat { get; set; }
-        public double Lng { get; set; }
-        public double Alt { get; set; }
-        public string Name { get; set; }
-        public PointLatLngAlt(double lat, double lng, double alt, string name)
-        {
-            Lat = lat;
-            Lng = lng;
-            Alt = alt;
-            Name = name;
-        }
-    }
-
-    // Minimal MathHelper class.
-    public static class MathHelper
-    {
-        public const float deg2rad = (float)(Math.PI / 180.0);
-        public static float constrain(float value, float min, float max)
-        {
-            if (value < min) return min;
-            if (value > max) return max;
-            return value;
-        }
-    }
-
-    // Minimal Quaternion class.
-    public class Quaternion
-    {
-        public double q1, q2, q3, q4;
-        public Quaternion(double q1, double q2, double q3, double q4)
-        {
-            this.q1 = q1;
-            this.q2 = q2;
-            this.q3 = q3;
-            this.q4 = q4;
-        }
-        // Create a quaternion from Euler angles using a 3-1-2 sequence.
-        public static Quaternion from_euler312(double roll, double pitch, double yaw)
-        {
-            double cr = Math.Cos(roll * 0.5);
-            double sr = Math.Sin(roll * 0.5);
-            double cp = Math.Cos(pitch * 0.5);
-            double sp = Math.Sin(pitch * 0.5);
-            double cy = Math.Cos(yaw * 0.5);
-            double sy = Math.Sin(yaw * 0.5);
-            double q1 = cr * cp * cy + sr * sp * sy;
-            double q2 = sr * cp * cy - cr * sp * sy;
-            double q3 = cr * sp * cy + sr * cp * sy;
-            double q4 = cr * cp * sy - sr * sp * cy;
-            return new Quaternion(q1, q2, q3, q4);
-        }
-    }
-}
-
-namespace MissionPlanner.ArduPilot
-{
-    using MissionPlanner.Utilities;
-    // Minimal MAVState stub.
-    public class MAVState
-    {
-        public ControlState cs = new ControlState();
-        public int sysid;
-        public int compid;
-    }
-    
-    public class ControlState
-    {
-        public double lat, lng, alt;
-        public double yaw;
-        public float vx, vy, vz;
-        public Vector3 Location => new Vector3((float)lat, (float)lng, (float)alt);
-    }
-}
+using GeoAPI.CoordinateSystems;
+using GeoAPI.CoordinateSystems.Transformations;
+using Vector3 = MissionPlanner.Utilities.Vector3;
+using MathNet.Numerics.LinearAlgebra;
+using MathNet.Numerics.RootFinding;
 
 namespace MissionPlanner.Swarm
 {
-    using MissionPlanner.Utilities;
-    using MissionPlanner.ArduPilot;
-
-    // Abstract base class for the formation controller.
-    public abstract class SwarmBase
-    {
-        // Renamed ambiguous property to FormationLeader.
-        public MAVState FormationLeader { get; set; }
-        public abstract void Update();
-        public abstract void SendCommand();
-    }
-
-    // Minimal PID stub.
-    public class PID { }
-
-    // Minimal LoadAttitudeController stub.
-    public class LoadAttitudeController
-    {
-        public virtual Vector3 CompensateRigidBodyDynamics(MAVState leader, MAVState follower, Dictionary<MAVState, Vector3> offsets)
-        {
-            // Base implementation returns zero.
-            return Vector3.Zero;
-        }
-    }
-
-    // PayloadState holds the estimated payload state.
-    public class PayloadState
-    {
-        public PointLatLngAlt Position { get; set; }
-        public float Yaw { get; set; }
-        public Vector3 Velocity { get; set; }
-        public Vector3 Acceleration { get; set; }
-        public Matrix3x3 RotationMatrix { get; set; }
-        public Vector3 AngularVelocity { get; set; }
-        public Vector3 AngularAcceleration { get; set; }
-    }
-
-    // Simple 3x3 matrix class.
-    public class Matrix3x3
-    {
-        public float[,] Data { get; private set; }
-        public Matrix3x3(float[,] data)
-        {
-            Data = data;
-        }
-        public static Matrix3x3 Identity()
-        {
-            return new Matrix3x3(new float[,] { { 1f, 0f, 0f }, { 0f, 1f, 0f }, { 0f, 0f, 1f } });
-        }
-        public Vector3 Multiply(Vector3 v)
-        {
-            float x = Data[0, 0] * v.x + Data[0, 1] * v.y + Data[0, 2] * v.z;
-            float y = Data[1, 0] * v.x + Data[1, 1] * v.y + Data[1, 2] * v.z;
-            float z = Data[2, 0] * v.x + Data[2, 1] * v.y + Data[2, 2] * v.z;
-            return new Vector3(x, y, z);
-        }
-        public static Matrix3x3 Transpose(Matrix3x3 m)
-        {
-            float[,] t = new float[3, 3];
-            for (int i = 0; i < 3; i++)
-                for (int j = 0; j < 3; j++)
-                    t[i, j] = m.Data[j, i];
-            return new Matrix3x3(t);
-        }
-    }
-
-    // PayloadEstimator estimates payload state based on three MAVStates.
-    public class PayloadEstimator
-    {
-        private const float sideLength = 0.5f;   // 50 cm
-        private readonly float R;                // Circumradius: sideLength/sqrt(3)
-
-        public PayloadEstimator()
-        {
-            R = sideLength / (float)Math.Sqrt(3.0);
-        }
-
-        public PayloadState EstimatePayloadState(List<MAVState> drones)
-        {
-            if (drones.Count < 3)
-                throw new ArgumentException("At least 3 drones are required for payload estimation.");
-
-            Vector3[] dronePos = new Vector3[3];
-            Vector2[] droneHoriz = new Vector2[3];
-            for (int i = 0; i < 3; i++)
-            {
-                dronePos[i] = drones[i].cs.Location;
-                droneHoriz[i] = new Vector2(dronePos[i].x, dronePos[i].y);
-            }
-
-            // Define payload attachment points in the payload body frame.
-            Vector2[] payloadVertices = new Vector2[3];
-            payloadVertices[0] = new Vector2(0f, R);
-            payloadVertices[1] = new Vector2(sideLength / 2f, -R);
-            payloadVertices[2] = new Vector2(-sideLength / 2f, -R);
-
-            // Compute centroids.
-            Vector2 centroidPayload = (payloadVertices[0] + payloadVertices[1] + payloadVertices[2]) / 3f;
-            Vector2 centroidDrones = (droneHoriz[0] + droneHoriz[1] + droneHoriz[2]) / 3f;
-
-            // Estimate yaw using least-squares alignment.
-            float num = 0f, den = 0f;
-            for (int i = 0; i < 3; i++)
-            {
-                Vector2 dp = new Vector2(payloadVertices[i].x - centroidPayload.x, payloadVertices[i].y - centroidPayload.y);
-                Vector2 dd = new Vector2(droneHoriz[i].x - centroidDrones.x, droneHoriz[i].y - centroidDrones.y);
-                num += dp.x * dd.y - dp.y * dd.x;
-                den += dp.x * dd.x + dp.y * dd.y;
-            }
-            float theta = (float)Math.Atan2(num, den);
-
-            // Estimate payload altitude.
-            float avgAlt = (dronePos[0].z + dronePos[1].z + dronePos[2].z) / 3f;
-            float payloadAlt = avgAlt + 2f; // add cable length (2 m)
-            PointLatLngAlt pos = new PointLatLngAlt(centroidDrones.x, centroidDrones.y, payloadAlt, "");
-
-            // Build rotation matrix from yaw (assume zero pitch/roll).
-            float cosT = (float)Math.Cos(theta);
-            float sinT = (float)Math.Sin(theta);
-            float[,] rData = new float[3, 3] { { cosT, -sinT, 0f }, { sinT, cosT, 0f }, { 0f, 0f, 1f } };
-            Matrix3x3 R_L = new Matrix3x3(rData);
-
-            PayloadState state = new PayloadState();
-            state.Position = pos;
-            state.Yaw = theta;
-            state.Velocity = Vector3.Zero;         // In a real system, these would be estimated over time.
-            state.Acceleration = Vector3.Zero;
-            state.RotationMatrix = R_L;
-            state.AngularVelocity = Vector3.Zero;
-            state.AngularAcceleration = Vector3.Zero;
-            return state;
-        }
-    }
-
-    // TensionSolver computes individual cable force contributions.
-    public class TensionSolver
-    {
-        private List<Vector3> rVectors;
-        public TensionSolver(List<Vector3> rVectors)
-        {
-            this.rVectors = rVectors;
-        }
-
-        // Simplified equal load-sharing solution.
-        // NOTE: In a full implementation, you would solve a system that includes both F_d and tau_d.
-        public List<Vector3> Solve(Vector3 F_d, Vector3 tau_d)
-        {
-            int n = rVectors.Count;
-            List<Vector3> forces = new List<Vector3>();
-            for (int i = 0; i < n; i++)
-            {
-                forces.Add((-1.0f / n) * F_d); // Only distributing translational force equally.
-            }
-            return forces;
-        }
-    }
-
-    // EnhancedLoadAttitudeController integrates full payload dynamics (translational and simplified rotational) and hybrid tension compensation.
-    public class EnhancedLoadAttitudeController : LoadAttitudeController
-    {
-        public float payloadMass = 0.5f; // Nominal payload mass (kg)
-        public Matrix3x3 payloadInertia = new Matrix3x3(new float[,] { { 0.05f, 0f, 0f }, { 0f, 0.05f, 0f }, { 0f, 0f, 0.05f } });
-        public PayloadState EstimatedPayloadState { get; set; }
-        public TensionSolver tensionSolver;
-        public float TensionThreshold = 0.5f; // Newtons
-
-        public EnhancedLoadAttitudeController()
-        {
-            // Define attachment points in the payload body frame.
-            List<Vector3> rVectors = new List<Vector3>();
-            float R_val = 0.5f / (float)Math.Sqrt(3.0);
-            rVectors.Add(new Vector3(0f, R_val, 0f));
-            rVectors.Add(new Vector3((0.5f / 2f), -R_val, 0f));
-            rVectors.Add(new Vector3(-(0.5f / 2f), -R_val, 0f));
-            tensionSolver = new TensionSolver(rVectors);
-        }
-
-        // Compute desired net force (F_d) and desired net torque (tau_d) for the payload.
-        public void ComputeDesiredTerms(out Vector3 F_d, out Vector3 tau_d)
-        {
-            // Translational term: F_d = m*(a_payload + g)
-            Vector3 a = EstimatedPayloadState.Acceleration; // Estimated payload acceleration (zero if unknown)
-            Vector3 g = new Vector3(0f, 0f, 9.81f);
-            F_d = payloadMass * (a + g);
-
-            // Rotational term: tau_d = J*(angularAcceleration) + ω x (J*ω)
-            Vector3 angularAcc = EstimatedPayloadState.AngularAcceleration; // Estimated angular acceleration (zero if unknown)
-            Vector3 omega = EstimatedPayloadState.AngularVelocity;            // Estimated angular velocity
-            Vector3 J_angularAcc = payloadInertia.Multiply(angularAcc);
-            Vector3 J_omega = payloadInertia.Multiply(omega);
-            Vector3 omegaCrossJomega = Vector3.Cross(omega, J_omega);
-            tau_d = J_angularAcc + omegaCrossJomega;
-        }
-
-        public override Vector3 CompensateRigidBodyDynamics(MAVState leader, MAVState follower, Dictionary<MAVState, Vector3> offsets)
-        {
-            Vector3 baseComp = base.CompensateRigidBodyDynamics(leader, follower, offsets);
-            Vector3 F_d, tau_d;
-            ComputeDesiredTerms(out F_d, out tau_d);
-            List<Vector3> cableForces = tensionSolver.Solve(F_d, tau_d);
-
-            // Determine follower index.
-            int index = 0;
-            foreach (var kv in offsets)
-            {
-                if (kv.Key == follower)
-                    break;
-                index++;
-            }
-            Vector3 feedforwardTerm = cableForces[index];
-
-            // Hybrid tension compensation: if the projected tension is below a threshold, assume cable slack.
-            float estimatedTension = EstimateCableTension(feedforwardTerm, follower);
-            if (estimatedTension < TensionThreshold)
-            {
-                feedforwardTerm = Vector3.Zero;
-            }
-            Vector3 totalComp = baseComp + feedforwardTerm;
-            return totalComp;
-        }
-
-        public float EstimateCableTension(Vector3 feedforwardTerm, MAVState mav)
-        {
-            Vector3 q = GetCableUnitVector(mav);
-            return Math.Abs(Vector3.Dot(feedforwardTerm, q));
-        }
-
-        // For this example, assume the cable unit vector is vertically downward.
-        public Vector3 GetCableUnitVector(MAVState mav)
-        {
-            return new Vector3(0f, 0f, -1f);
-        }
-    }
-
-    // Formation controller integrates payload estimation and sends commands.
-    public class Formation : SwarmBase
+    class Formation : Swarm
     {
         private Dictionary<MAVState, Vector3> offsets = new Dictionary<MAVState, Vector3>();
+        private Dictionary<MAVState, Tuple<PID, PID, PID, PID>> pids = new Dictionary<MAVState, Tuple<PID, PID, PID, PID>>();
         private Dictionary<MAVState, Vector3> compFiltered = new Dictionary<MAVState, Vector3>();
-        private PointLatLngAlt masterpos = new PointLatLngAlt(0, 0, 0, "");
-        private EnhancedLoadAttitudeController payloadController = new EnhancedLoadAttitudeController();
-        private PayloadEstimator payloadEstimator = new PayloadEstimator();
+        private PointLatLngAlt masterpos = new PointLatLngAlt();
+        private LoadAttitudeController payloadController = new LoadAttitudeController();
 
         private float payloadGain = 0.5f;
         private float maxRollComp = 10f;
@@ -381,93 +26,221 @@ namespace MissionPlanner.Swarm
         private float compTau = 0.2f;
         private float blendAlpha = 0.7f;
 
-        // Set offsets for each MAV.
-        public void setOffsets(MAVState mav, double x, double y, double z)
-        {
-            offsets[mav] = new Vector3((float)x, (float)y, (float)z);
-        }
+        CoordinateTransformationFactory ctfac = new CoordinateTransformationFactory();
+        IGeographicCoordinateSystem wgs84 = GeographicCoordinateSystem.WGS84;
 
-        public Vector3 getOffsets(MAVState mav)
-        {
-            return offsets.ContainsKey(mav) ? offsets[mav] : new Vector3(offsets.Count, 0f, 0f);
-        }
+        public void setOffsets(MAVState mav, double x, double y, double z) => offsets[mav] = new Vector3((float)x, (float)y, (float)z);
+        public Vector3 getOffsets(MAVState mav) => offsets.ContainsKey(mav) ? offsets[mav] : new Vector3(offsets.Count, 0, 0);
 
         public override void Update()
         {
-            if (FormationLeader == null)
-                FormationLeader = new MAVState(); // For demonstration.
-            masterpos = new PointLatLngAlt(FormationLeader.cs.lat, FormationLeader.cs.lng, FormationLeader.cs.alt, "");
-
-            // Use the first 3 drones from offsets for payload estimation.
-            List<MAVState> droneList = new List<MAVState>();
-            foreach (var kv in offsets)
-            {
-                droneList.Add(kv.Key);
-                if (droneList.Count == 3)
-                    break;
-            }
-            if (droneList.Count == 3)
-            {
-                PayloadState estState = payloadEstimator.EstimatePayloadState(droneList);
-                payloadController.EstimatedPayloadState = estState;
-            }
-        }
-
-        public override void SendCommand()
-        {
-            if (masterpos == null)
-                return;
-
-            foreach (var kv in offsets)
-            {
-                MAVState mav = kv.Key;
-                if (mav == FormationLeader)
-                    continue;
-
-                PointLatLngAlt target = masterpos;
-                try
-                {
-                    float heading = -(float)(FormationLeader.cs.yaw * MathHelper.deg2rad);
-                    Vector3 offset = getOffsets(mav);
-
-                    // Compute payload compensation.
-                    Vector3 payloadComp = payloadController.CompensateRigidBodyDynamics(FormationLeader, mav, offsets);
-
-                    // Filter the compensation command (simple first-order low-pass filter).
-                    float dt = (float)(DateTime.UtcNow - DateTime.MinValue).TotalSeconds;
-                    Vector3 prev = compFiltered.ContainsKey(mav) ? compFiltered[mav] : Vector3.Zero;
-                    float alpha = dt / (compTau + dt);
-                    Vector3 filtered = new Vector3(
-                        prev.x + (payloadComp.x - prev.x) * alpha,
-                        prev.y + (payloadComp.y - prev.y) * alpha,
-                        prev.z + (payloadComp.z - prev.z) * alpha
-                    );
-                    compFiltered[mav] = filtered;
-                    float rollComp = MathHelper.constrain(filtered.x * payloadGain, -maxRollComp, maxRollComp);
-                    float pitchComp = MathHelper.constrain(filtered.y * payloadGain, -maxPitchComp, maxPitchComp);
-                    float newroll = rollComp * blendAlpha;
-                    float newpitch = pitchComp * blendAlpha;
-                    double targyaw = 0; // Compute target yaw as needed.
-                    double yawerror = wrap_180(targyaw - FormationLeader.cs.yaw);
-                    Quaternion q = Quaternion.from_euler312(newroll * MathHelper.deg2rad, newpitch * MathHelper.deg2rad, (float)yawerror * MathHelper.deg2rad);
-
-                    Console.WriteLine("Sending command to MAV {0}: Roll {1}, Pitch {2}, Yaw Error {3}",
-                        mav.sysid, newroll, newpitch, yawerror);
-                }
-                catch (Exception ex)
-                {
-                    Console.WriteLine("SendCommand failed: " + ex);
-                }
-            }
+            if (MainV2.comPort.MAV.cs.lat == 0 || MainV2.comPort.MAV.cs.lng == 0) return;
+            if (Leader == null) Leader = MainV2.comPort.MAV;
+            masterpos = new PointLatLngAlt(Leader.cs.lat, Leader.cs.lng, Leader.cs.alt, "");
         }
 
         private double wrap_180(double input)
         {
-            if (input > 180)
-                return input - 360;
-            if (input < -180)
-                return input + 360;
+            if (input > 180) return input - 360;
+            if (input < -180) return input + 360;
             return input;
+        }
+
+        public override void SendCommand()
+        {
+            if (masterpos.Lat == 0 || masterpos.Lng == 0) return;
+            foreach (var port in MainV2.Comports)
+            {
+                foreach (var mav in port.MAVlist)
+                {
+                    if (mav == Leader) continue;
+                    PointLatLngAlt target = new PointLatLngAlt(masterpos);
+                    try
+                    {
+                        int utmzone = (int)((masterpos.Lng + 180.0) / 6.0);
+                        IProjectedCoordinateSystem utm = ProjectedCoordinateSystem.WGS84_UTM(utmzone, masterpos.Lat >= 0);
+                        var trans = ctfac.CreateFromCoordinateSystems(wgs84, utm);
+                        double[] pLeader = trans.MathTransform.Transform(new double[] { target.Lng, target.Lat });
+                        double heading = -Leader.cs.yaw * MathHelper.deg2rad;
+                        Vector3 offset = getOffsets(mav);
+                        pLeader[0] += offset.x * Math.Cos(heading) - offset.y * Math.Sin(heading);
+                        pLeader[1] += offset.x * Math.Sin(heading) + offset.y * Math.Cos(heading);
+                        double[] inv = trans.MathTransform.Inverse().Transform(pLeader);
+                        target.Lat = inv[1]; target.Lng = inv[0]; target.Alt += offset.z;
+
+                        if (mav.cs.firmware == Firmwares.ArduPlane)
+                        {
+                            double dist = target.GetDistance(mav.cs.Location);
+                            double targyaw = mav.cs.Location.GetBearing(target);
+                            double yawerror = wrap_180(targyaw - mav.cs.yaw);
+                            Vector3 payloadComp = payloadController.CompensateRigidBodyDynamics(Leader, mav, offsets);
+                            float dt = (float)(DateTime.UtcNow - DateTime.MinValue).TotalSeconds;
+                            Vector3 prev = compFiltered.ContainsKey(mav) ? compFiltered[mav] : Vector3.Zero;
+                            float alpha = dt / (compTau + dt);
+                            Vector3 filtered = prev + (payloadComp - prev) * alpha;
+                            compFiltered[mav] = filtered;
+                            float rollComp = (float)MathHelper.constrain(filtered.x * payloadGain, -maxRollComp, maxRollComp);
+                            float pitchComp = (float)MathHelper.constrain(filtered.y * payloadGain, -maxPitchComp, maxPitchComp);
+                            float newroll = rollComp * blendAlpha;
+                            float newpitch = pitchComp * blendAlpha;
+                            Quaternion q = Quaternion.from_euler312(newroll * MathHelper.deg2rad, newpitch * MathHelper.deg2rad, (float)yawerror * MathHelper.deg2rad);
+                            var att = new MAVLink.mavlink_set_attitude_target_t
+                            {
+                                target_system = mav.sysid,
+                                target_component = mav.compid,
+                                type_mask = 0b10000101,
+                                q = new float[] { (float)q.q1, (float)q.q2, (float)q.q3, (float)q.q4 }
+                            };
+                            port.sendPacket(att, mav.sysid, mav.compid);
+                        }
+                        else
+                        {
+                            Vector3 vel = new Vector3(Leader.cs.vx, Leader.cs.vy, Leader.cs.vz);
+                            port.setPositionTargetGlobalInt(mav.sysid, mav.compid, true, true, false, false,
+                                MAVLink.MAV_FRAME.GLOBAL_RELATIVE_ALT_INT,
+                                target.Lat, target.Lng, target.Alt,
+                                vel.x, vel.y, vel.z, 0, 0);
+                        }
+                    }
+                    catch (Exception ex) { Console.WriteLine("SendCommand failed: " + ex); }
+                }
+            }
+        }
+
+        // Classes below unchanged
+    }
+
+    public static class SwarmConstants
+    {
+        public const float DEFAULT_LEADER_MASS = 1.0f;
+    }
+
+    public static class VectorUtils
+    {
+        public static Vector3 NormalizeVector(Vector3 v)
+        {
+            double len = Math.Sqrt(v.x * v.x + v.y * v.y + v.z * v.z);
+            return len == 0 ? Vector3.Zero : new Vector3((float)(v.x / len), (float)(v.y / len), (float)(v.z / len));
+        }
+    }
+
+    public class PID
+    {
+        private float _dt;
+        private readonly float M_2PI = (float)(Math.PI * 2);
+        private float _input;
+        private float _derivative;
+        private float _kp;
+        private float _ki;
+        private float _integrator;
+        private float _imax;
+        private float _kd;
+        private float _ff;
+        private float _filt_hz = AC_PID_FILT_HZ_DEFAULT;
+        const float AC_PID_FILT_HZ_DEFAULT = 20.0f;
+        const float AC_PID_FILT_HZ_MIN = 0.01f;
+
+        public PID(float initial_p, float initial_i, float initial_d, float initial_imax, float initial_filt_hz, float dt, float initial_ff)
+        {
+            _dt = dt;
+            _integrator = 0;
+            _input = 0;
+            _derivative = 0;
+            _kp = initial_p;
+            _ki = initial_i;
+            _kd = initial_d;
+            _imax = Math.Abs(initial_imax);
+            filt_hz(initial_filt_hz);
+            _ff = initial_ff;
+            _flags._reset_filter = true;
+        }
+        public void set_dt(float dt) => _dt = dt;
+        public void filt_hz(float hz) => _filt_hz = Math.Max(hz, AC_PID_FILT_HZ_MIN);
+        public void set_input_filter_all(float input)
+        {
+            if (!isfinite(input))
+                return;
+            if (_flags._reset_filter)
+            {
+                _flags._reset_filter = false;
+                _input = input;
+                _derivative = 0;
+            }
+            float change = get_filt_alpha() * (input - _input);
+            _input += change;
+            if (_dt > 0)
+                _derivative = change / _dt;
+        }
+        private bool isfinite(float x) => !float.IsInfinity(x);
+        public float get_p() { _pid_info.P = _input * _kp; return _pid_info.P; }
+        public float get_i()
+        {
+            
+             if (_ki != 0 && _dt != 0)
+                {
+                _integrator += (_input * _ki) * _dt;  
+                _integrator = (float)MathHelper.constrain(_integrator, -_imax, _imax);
+                _pid_info.I = _integrator;
+                return _integrator;
+                }
+                return 0;
+            
+        }
+        public float get_d() { _pid_info.D = _kd * _derivative; return _pid_info.D; }
+        public float get_pid() => get_p() + get_i() + get_d();
+        public void reset_I() => _integrator = 0;
+        public float get_filt_alpha() => _filt_hz == 0 ? 1f : _dt / (_dt + 1f / (M_2PI * _filt_hz));
+        internal class flags { internal bool _reset_filter; }
+        private flags _flags = new flags();
+        private pid_info _pid_info = new pid_info();
+        internal class pid_info { internal float P, I, D, FF; }
+    }
+
+    public class LoadAttitudeController
+    {
+        public Vector3 CompensateRigidBodyDynamics(MAVState leader, MAVState follower, Dictionary<MAVState, Vector3> offsets)
+        {
+            if (!offsets.ContainsKey(follower))
+                return Vector3.Zero;
+            var pts = new List<Vector3>(offsets.Values);
+            int n = pts.Count;
+            if (n < 3)
+                return Vector3.Zero;
+            float mass = SwarmConstants.DEFAULT_LEADER_MASS;
+            // Cast leader.cs.ax, etc. to float explicitly if needed
+            var F = Vector<double>.Build.DenseOfArray(new double[]
+            {
+                (double)(leader.cs.ax * mass),
+                (double)(leader.cs.ay * mass),
+                (double)((leader.cs.az + 9.81f) * mass)
+            });
+            var Tau = Vector<double>.Build.Dense(3);
+            var W = Vector<double>.Build.Dense(6);
+            for (int i = 0; i < 3; i++)
+            {
+                W[i] = F[i];
+                W[i + 3] = Tau[i];
+            }
+            var Phi = Matrix<double>.Build.Dense(6, n);
+            for (int i = 0; i < n; i++)
+            {
+                var r = pts[i];
+                var qi = VectorUtils.NormalizeVector(r);
+                Phi[0, i] = qi.x;
+                Phi[1, i] = qi.y;
+                Phi[2, i] = qi.z;
+                Phi[3, i] = r.y * qi.z - r.z * qi.y;
+                Phi[4, i] = r.z * qi.x - r.x * qi.z;
+                Phi[5, i] = r.x * qi.y - r.y * qi.x;
+            }
+            var T = Phi.PseudoInverse() * W;
+            int idx = new List<MAVState>(offsets.Keys).IndexOf(follower);
+            if (idx >= 0 && idx < T.Count)
+            {
+                var qi = VectorUtils.NormalizeVector(pts[idx]);
+                return qi * (float)Math.Max(0, T[idx]);
+            }
+            return Vector3.Zero;
         }
     }
 }
