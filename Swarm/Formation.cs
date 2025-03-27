@@ -106,8 +106,6 @@ namespace MissionPlanner.Swarm
                 }
             }
         }
-
-        // Classes below unchanged
     }
 
     public static class SwarmConstants
@@ -175,16 +173,16 @@ namespace MissionPlanner.Swarm
         public float get_p() { _pid_info.P = _input * _kp; return _pid_info.P; }
         public float get_i()
         {
-            
-             if (_ki != 0 && _dt != 0)
-                {
-                _integrator += (_input * _ki) * _dt;  
+
+            if (_ki != 0 && _dt != 0)
+            {
+                _integrator += (_input * _ki) * _dt;
                 _integrator = (float)MathHelper.constrain(_integrator, -_imax, _imax);
                 _pid_info.I = _integrator;
                 return _integrator;
-                }
-                return 0;
-            
+            }
+            return 0;
+
         }
         public float get_d() { _pid_info.D = _kd * _derivative; return _pid_info.D; }
         public float get_pid() => get_p() + get_i() + get_d();
@@ -195,52 +193,86 @@ namespace MissionPlanner.Swarm
         private pid_info _pid_info = new pid_info();
         internal class pid_info { internal float P, I, D, FF; }
     }
-
     public class LoadAttitudeController
     {
+        // Payload mass (kg) used in dynamic wrench computation
+        public double PayloadMass { get; set; } = SwarmConstants.DEFAULT_LEADER_MASS;
+
+        // Payload inertia matrix JL (kg·m²) from Table III of Sreenath & Kumar (2013)
+        private readonly Matrix<double> PayloadInertia = Matrix<double>.Build.DenseOfArray(new double[,]
+        {
+        {2.1e-2, 0,      0},
+        {0,      1.87e-2,0},
+        {0,      0,      3.97e-2}
+        });
+
+        /// <summary>
+        /// Computes the tension force along the cable for a given follower UAV
+        /// using full rigid-body load dynamics (Section II.B, eqns 8,9,10).
+        /// </summary>
         public Vector3 CompensateRigidBodyDynamics(MAVState leader, MAVState follower, Dictionary<MAVState, Vector3> offsets)
         {
-            if (!offsets.ContainsKey(follower))
-                return Vector3.Zero;
+            if (!offsets.ContainsKey(follower)) return Vector3.Zero;
+
             var pts = new List<Vector3>(offsets.Values);
-            int n = pts.Count;
-            if (n < 3)
-                return Vector3.Zero;
-            float mass = SwarmConstants.DEFAULT_LEADER_MASS;
-            // Cast leader.cs.ax, etc. to float explicitly if needed
-            var F = Vector<double>.Build.DenseOfArray(new double[]
-            {
-                (double)(leader.cs.ax * mass),
-                (double)(leader.cs.ay * mass),
-                (double)((leader.cs.az + 9.81f) * mass)
-            });
-            var Tau = Vector<double>.Build.Dense(3);
+            if (pts.Count < 3) return Vector3.Zero;  // need ≥3 cables for rigid-body
+
+            // Build load force wrench Wf = -R_L^T * (m_L(ẍ_L + g e3)) (eqn 8)
+            float m = (float)PayloadMass;
+            var accel = Vector<double>.Build.DenseOfArray(new double[] { leader.cs.ax * m, leader.cs.ay * m, (leader.cs.az + 9.81f) * m });
+            var grav = Vector<double>.Build.DenseOfArray(new double[] { 0, 0, -9.81 }) * m;
+            var R = BuildRotationMatrix(leader.cs.roll, leader.cs.pitch, leader.cs.yaw);
+            var Wf = -R.Transpose() * (accel + grav);
+
+            // Build load moment wrench Wm = -(J_LΩ̇_L + Ω_L×J_LΩ_L) (eqn 9)
+            var omega = Vector<double>.Build.Dense(3);      // angular rate unknown => assume zero
+            var omegaDot = Vector<double>.Build.Dense(3);  // angular accel unknown => assume zero
+            var Wm = -(PayloadInertia * omegaDot + Cross(omega, PayloadInertia * omega));
+
+            // Combine force and moment into 6×1 wrench W
             var W = Vector<double>.Build.Dense(6);
-            for (int i = 0; i < 3; i++)
-            {
-                W[i] = F[i];
-                W[i + 3] = Tau[i];
-            }
-            var Phi = Matrix<double>.Build.Dense(6, n);
-            for (int i = 0; i < n; i++)
+            W.SetSubVector(0, 3, Wf);
+            W.SetSubVector(3, 3, Wm);
+
+            // Build geometry matrix Φ (6×n) per eqn 12
+            var Phi = Matrix<double>.Build.Dense(6, pts.Count);
+            for (int i = 0; i < pts.Count; i++)
             {
                 var r = pts[i];
                 var qi = VectorUtils.NormalizeVector(r);
-                Phi[0, i] = qi.x;
-                Phi[1, i] = qi.y;
-                Phi[2, i] = qi.z;
+                Phi[0, i] = qi.x; Phi[1, i] = qi.y; Phi[2, i] = qi.z;
                 Phi[3, i] = r.y * qi.z - r.z * qi.y;
                 Phi[4, i] = r.z * qi.x - r.x * qi.z;
                 Phi[5, i] = r.x * qi.y - r.y * qi.x;
             }
+
+            // Solve T = Φ⁺ W (eqn 10), only positive tension along cable direction
             var T = Phi.PseudoInverse() * W;
             int idx = new List<MAVState>(offsets.Keys).IndexOf(follower);
             if (idx >= 0 && idx < T.Count)
-            {
-                var qi = VectorUtils.NormalizeVector(pts[idx]);
-                return qi * (float)Math.Max(0, T[idx]);
-            }
+                return VectorUtils.NormalizeVector(pts[idx]) * (float)Math.Max(0, T[idx]);
+
             return Vector3.Zero;
         }
+
+        // Converts roll, pitch, yaw (degrees) to world→body rotation matrix
+        private Matrix<double> BuildRotationMatrix(float roll, float pitch, float yaw)
+        {
+            double r = roll * MathHelper.deg2rad, p = pitch * MathHelper.deg2rad, y = yaw * MathHelper.deg2rad;
+            double cr = Math.Cos(r), sr = Math.Sin(r), cp = Math.Cos(p), sp = Math.Sin(p), cy = Math.Cos(y), sy = Math.Sin(y);
+            return Matrix<double>.Build.DenseOfArray(new double[,] {
+            {cy*cp, cy*sp*sr - sy*cr, cy*sp*cr + sy*sr},
+            {sy*cp, sy*sp*sr + cy*cr, sy*sp*cr - cy*sr},
+            {-sp,   cp*sr,            cp*cr}
+        });
+        }
+
+        // 3D cross product helper for MathNet vectors
+        private Vector<double> Cross(Vector<double> a, Vector<double> b)
+            => Vector<double>.Build.DenseOfArray(new double[]{
+            a[1]*b[2] - a[2]*b[1],
+            a[2]*b[0] - a[0]*b[2],
+            a[0]*b[1] - a[1]*b[0]
+            });
     }
 }
