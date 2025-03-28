@@ -194,85 +194,99 @@ namespace MissionPlanner.Swarm
         internal class pid_info { internal float P, I, D, FF; }
     }
     public class LoadAttitudeController
-    {
-        // Payload mass (kg) used in dynamic wrench computation
-        public double PayloadMass { get; set; } = SwarmConstants.DEFAULT_LEADER_MASS;
+{
+    public double PayloadMass { get; set; } = SwarmConstants.DEFAULT_LEADER_MASS;
 
-        // Payload inertia matrix JL (kg·m²) from Table III of Sreenath & Kumar (2013)
-        private readonly Matrix<double> PayloadInertia = Matrix<double>.Build.DenseOfArray(new double[,]
-        {
+    // Payload inertia matrix JL (kg·m²) from Table III of Sreenath & Kumar (2013)
+    private readonly Matrix<double> PayloadInertia = Matrix<double>.Build.DenseOfArray(new double[,]
+    {
         {2.1e-2, 0,      0},
         {0,      1.87e-2,0},
         {0,      0,      3.97e-2}
-        });
+    });
 
-        /// <summary>
-        /// Computes the tension force along the cable for a given follower UAV
-        /// using full rigid-body load dynamics (Section II.B, eqns 8,9,10).
-        /// </summary>
-        public Vector3 CompensateRigidBodyDynamics(MAVState leader, MAVState follower, Dictionary<MAVState, Vector3> offsets)
+    /// <summary>
+    /// Computes the tension force along the cable for a given follower UAV
+    /// using full rigid-body load dynamics (Section II.B, eqns 8,9,10).
+    /// Includes dynamic adjustment of filter time constant (compTau) based on leader yaw rate.
+    /// Adds predictive offset compensation based on leader acceleration.
+    /// </summary>
+    public Vector3 CompensateRigidBodyDynamics(MAVState leader, MAVState follower, Dictionary<MAVState, Vector3> offsets)
+    {
+        if (!offsets.ContainsKey(follower)) return Vector3.Zero;
+
+        var pts = new List<Vector3>(offsets.Values);
+        if (pts.Count < 3) return Vector3.Zero;
+
+        float m = (float)PayloadMass;
+
+        // Adjust compTau based on turning rate (faster filtering during turns)
+        float yawRate = leader.cs.gyrZ; // assuming deg/s
+        float compTau = Math.Abs(yawRate) > 10 ? 0.05f : 0.2f;
+        float dt = 0.05f; // Replace with actual timestep if available
+        float alpha = dt / (compTau + dt);
+
+        // Predictive offset: add component in direction of leader acceleration
+        var leaderAcc = new Vector3(leader.cs.ax, leader.cs.ay, leader.cs.az);
+        var dynamicOffset = offsets[follower] + leaderAcc * 0.1f; // predictiveGain = 0.1
+
+        // Build load force wrench Wf = -R_L^T * (m_L(ẍ_L + g e3)) (eqn 8)
+        var accel = Vector<double>.Build.DenseOfArray(new double[]{ leader.cs.ax*m, leader.cs.ay*m, (leader.cs.az + 9.81f)*m });
+        var grav = Vector<double>.Build.DenseOfArray(new double[]{ 0, 0, -9.81 }) * m;
+        var R = BuildRotationMatrix(leader.cs.roll, leader.cs.pitch, leader.cs.yaw);
+        var Wf = -R.Transpose() * (accel + grav);
+
+        // Build load moment wrench Wm = -(J_LΩ̇_L + Ω_L×J_LΩ_L) (eqn 9)
+        var omega = Vector<double>.Build.Dense(3);      // angular rate unknown => assume zero
+        var omegaDot = Vector<double>.Build.Dense(3);  // angular accel unknown => assume zero
+        var Wm = -(PayloadInertia*omegaDot + Cross(omega, PayloadInertia*omega));
+
+        // Combine force and moment into 6×1 wrench W
+        var W = Vector<double>.Build.Dense(6);
+        W.SetSubVector(0, 3, Wf);
+        W.SetSubVector(3, 3, Wm);
+
+        // Build geometry matrix Φ (6×n) per eqn 12
+        var Phi = Matrix<double>.Build.Dense(6, pts.Count);
+        for(int i=0; i<pts.Count; i++)
         {
-            if (!offsets.ContainsKey(follower)) return Vector3.Zero;
-
-            var pts = new List<Vector3>(offsets.Values);
-            if (pts.Count < 3) return Vector3.Zero;  // need ≥3 cables for rigid-body
-
-            // Build load force wrench Wf = -R_L^T * (m_L(ẍ_L + g e3)) (eqn 8)
-            float m = (float)PayloadMass;
-            var accel = Vector<double>.Build.DenseOfArray(new double[] { leader.cs.ax * m, leader.cs.ay * m, (leader.cs.az + 9.81f) * m });
-            var grav = Vector<double>.Build.DenseOfArray(new double[] { 0, 0, -9.81 }) * m;
-            var R = BuildRotationMatrix(leader.cs.roll, leader.cs.pitch, leader.cs.yaw);
-            var Wf = -R.Transpose() * (accel + grav);
-
-            // Build load moment wrench Wm = -(J_LΩ̇_L + Ω_L×J_LΩ_L) (eqn 9)
-            var omega = Vector<double>.Build.Dense(3);      // angular rate unknown => assume zero
-            var omegaDot = Vector<double>.Build.Dense(3);  // angular accel unknown => assume zero
-            var Wm = -(PayloadInertia * omegaDot + Cross(omega, PayloadInertia * omega));
-
-            // Combine force and moment into 6×1 wrench W
-            var W = Vector<double>.Build.Dense(6);
-            W.SetSubVector(0, 3, Wf);
-            W.SetSubVector(3, 3, Wm);
-
-            // Build geometry matrix Φ (6×n) per eqn 12
-            var Phi = Matrix<double>.Build.Dense(6, pts.Count);
-            for (int i = 0; i < pts.Count; i++)
-            {
-                var r = pts[i];
-                var qi = VectorUtils.NormalizeVector(r);
-                Phi[0, i] = qi.x; Phi[1, i] = qi.y; Phi[2, i] = qi.z;
-                Phi[3, i] = r.y * qi.z - r.z * qi.y;
-                Phi[4, i] = r.z * qi.x - r.x * qi.z;
-                Phi[5, i] = r.x * qi.y - r.y * qi.x;
-            }
-
-            // Solve T = Φ⁺ W (eqn 10), only positive tension along cable direction
-            var T = Phi.PseudoInverse() * W;
-            int idx = new List<MAVState>(offsets.Keys).IndexOf(follower);
-            if (idx >= 0 && idx < T.Count)
-                return VectorUtils.NormalizeVector(pts[idx]) * (float)Math.Max(0, T[idx]);
-
-            return Vector3.Zero;
+            var r = pts[i];
+            var qi = VectorUtils.NormalizeVector(r);
+            Phi[0,i]=qi.x; Phi[1,i]=qi.y; Phi[2,i]=qi.z;
+            Phi[3,i]=r.y*qi.z - r.z*qi.y;
+            Phi[4,i]=r.z*qi.x - r.x*qi.z;
+            Phi[5,i]=r.x*qi.y - r.y*qi.x;
         }
 
-        // Converts roll, pitch, yaw (degrees) to world→body rotation matrix
-        private Matrix<double> BuildRotationMatrix(float roll, float pitch, float yaw)
+        // Solve T = Φ⁺ W (eqn 10), only positive tension along cable direction
+        var T = Phi.PseudoInverse() * W;
+        int idx = new List<MAVState>(offsets.Keys).IndexOf(follower);
+        if (idx >= 0 && idx < T.Count)
         {
-            double r = roll * MathHelper.deg2rad, p = pitch * MathHelper.deg2rad, y = yaw * MathHelper.deg2rad;
-            double cr = Math.Cos(r), sr = Math.Sin(r), cp = Math.Cos(p), sp = Math.Sin(p), cy = Math.Cos(y), sy = Math.Sin(y);
-            return Matrix<double>.Build.DenseOfArray(new double[,] {
+            var qi = VectorUtils.NormalizeVector(dynamicOffset); // use predictive offset
+            return qi * (float)Math.Max(0, T[idx]) * alpha; // apply dynamic filter gain
+        }
+
+        return Vector3.Zero;
+    }
+
+    // Converts roll, pitch, yaw (degrees) to world→body rotation matrix
+    private Matrix<double> BuildRotationMatrix(float roll, float pitch, float yaw)
+    {
+        double r=roll*MathHelper.deg2rad, p=pitch*MathHelper.deg2rad, y=yaw*MathHelper.deg2rad;
+        double cr=Math.Cos(r), sr=Math.Sin(r), cp=Math.Cos(p), sp=Math.Sin(p), cy=Math.Cos(y), sy=Math.Sin(y);
+        return Matrix<double>.Build.DenseOfArray(new double[,] {
             {cy*cp, cy*sp*sr - sy*cr, cy*sp*cr + sy*sr},
             {sy*cp, sy*sp*sr + cy*cr, sy*sp*cr - cy*sr},
             {-sp,   cp*sr,            cp*cr}
         });
-        }
+    }
 
-        // 3D cross product helper for MathNet vectors
-        private Vector<double> Cross(Vector<double> a, Vector<double> b)
-            => Vector<double>.Build.DenseOfArray(new double[]{
+    // 3D cross product helper for MathNet vectors
+    private Vector<double> Cross(Vector<double> a, Vector<double> b)
+        => Vector<double>.Build.DenseOfArray(new double[]{
             a[1]*b[2] - a[2]*b[1],
             a[2]*b[0] - a[0]*b[2],
             a[0]*b[1] - a[1]*b[0]
-            });
-    }
+        });
 }
