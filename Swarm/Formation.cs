@@ -215,7 +215,8 @@ namespace MissionPlanner.Swarm
             if (pts.Count < 3) return Vector3.Zero;
 
             var leaderAcc = new Vector3(leader.cs.ax, leader.cs.ay, leader.cs.az);
-            var dynamicOffset = offsets[follower] + leaderAcc * 0.1f;
+            float predictionHorizon = 0.5f; // in seconds
+            var dynamicOffset = offsets[follower] + 0.5f * leaderAcc * (predictionHorizon * predictionHorizon);
 
             float yawRate = EstimateYawRate(leader);
             float compTau = Math.Abs(yawRate) > 10 ? 0.05f : 0.2f;
