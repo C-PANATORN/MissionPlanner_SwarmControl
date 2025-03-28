@@ -214,9 +214,7 @@ namespace MissionPlanner.Swarm
             var pts = new List<Vector3>(offsets.Values);
             if (pts.Count < 3) return Vector3.Zero;
 
-            var leaderAcc = new Vector3(leader.cs.ax, leader.cs.ay, leader.cs.az);
-            float predictionHorizon = 0.5f; // in seconds
-            var dynamicOffset = offsets[follower] + 0.5f * leaderAcc * (predictionHorizon * predictionHorizon);
+            var staticOffset = offsets[follower];
 
             float yawRate = EstimateYawRate(leader);
             float compTau = Math.Abs(yawRate) > 10 ? 0.05f : 0.2f;
@@ -252,7 +250,7 @@ namespace MissionPlanner.Swarm
             int idx = new List<MAVState>(offsets.Keys).IndexOf(follower);
             if (idx >= 0 && idx < T.Count)
             {
-                var qi = VectorUtils.NormalizeVector(dynamicOffset);
+                var qi = VectorUtils.NormalizeVector(staticOffset);
                 return qi * (float)Math.Max(0, T[idx]) * alpha;
             }
 
