@@ -15,9 +15,9 @@ namespace MissionPlanner.Swarm
     // Helper class for math functions.
     internal static class MathHelper
     {
-        public const double Deg2Rad = Math.PI / 180.0;
-        public const double Rad2Deg = 180.0 / Math.PI;
-        public static double Constrain(double value, double min, double max)
+        public const double deg2rad = Math.PI / 180.0;
+        public const double rad2deg = 180.0 / Math.PI;
+        public static double constrain(double value, double min, double max)
         {
             if (value < min)
                 return min;
@@ -32,44 +32,44 @@ namespace MissionPlanner.Swarm
     {
         public static Vector3 NormalizeVector(Vector3 v)
         {
-            double length = Math.Sqrt(v.x * v.x + v.y * v.y + v.z * v.z);
-            return length == 0 ? Vector3.Zero : new Vector3((float)(v.x / length), (float)(v.y / length), (float)(v.z / length));
+            double len = Math.Sqrt(v.x * v.x + v.y * v.y + v.z * v.z);
+            return len == 0 ? Vector3.Zero : new Vector3((float)(v.x / len), (float)(v.y / len), (float)(v.z / len));
         }
     }
 
     internal static class SwarmConstants
     {
-        public const float DefaultLeaderMass = 1.0f;
+        public const float DEFAULT_LEADER_MASS = 1.0f;
     }
 
-    // Formation class: Implements a cascaded controller that combines feedforward dynamic compensation and PID feedback.
+    // Formation class using original naming conventions.
     internal class Formation : Swarm
     {
-        private readonly Dictionary<MAVState, Vector3> _offsets = new Dictionary<MAVState, Vector3>();
-        private readonly Dictionary<MAVState, Tuple<PID, PID, PID, PID>> _pids = new Dictionary<MAVState, Tuple<PID, PID, PID, PID>>();
-        private readonly Dictionary<MAVState, Vector3> _compFiltered = new Dictionary<MAVState, Vector3>();
-        private PointLatLngAlt _masterPos = new PointLatLngAlt();
-        private readonly LoadAttitudeController _payloadController = new LoadAttitudeController();
+        private readonly Dictionary<MAVState, Vector3> offsets = new Dictionary<MAVState, Vector3>();
+        private readonly Dictionary<MAVState, Tuple<PID, PID, PID, PID>> pids = new Dictionary<MAVState, Tuple<PID, PID, PID, PID>>();
+        private readonly Dictionary<MAVState, Vector3> compFiltered = new Dictionary<MAVState, Vector3>();
+        private PointLatLngAlt masterpos = new PointLatLngAlt();
+        private readonly LoadAttitudeController payloadController = new LoadAttitudeController();
 
         // Feedforward parameters.
-        private const float PayloadGain = 0.5f;
-        private const float MaxRollComp = 10f;
-        private const float MaxPitchComp = 10f;
-        private const float CompTau = 0.2f;
-        private const float BlendAlpha = 0.7f;
+        private const float payloadGain = 0.5f;
+        private const float maxRollComp = 10f;
+        private const float maxPitchComp = 10f;
+        private const float compTau = 0.2f;
+        private const float blendAlpha = 0.7f;
 
         // Coordinate transformation members.
-        private readonly CoordinateTransformationFactory _ctfac = new CoordinateTransformationFactory();
-        private readonly IGeographicCoordinateSystem _wgs84 = GeographicCoordinateSystem.WGS84;
+        private readonly CoordinateTransformationFactory ctfac = new CoordinateTransformationFactory();
+        private readonly IGeographicCoordinateSystem wgs84 = GeographicCoordinateSystem.WGS84;
 
-        // For proper delta time calculation, store the last update time.
-        private DateTime _lastUpdateTime = DateTime.UtcNow;
+        // For proper dt calculation, you can store the last update time.
+        private DateTime lastUpdateTime = DateTime.UtcNow;
 
-        public void SetOffsets(MAVState mav, double x, double y, double z) =>
-            _offsets[mav] = new Vector3((float)x, (float)y, (float)z);
+        public void setOffsets(MAVState mav, double x, double y, double z) =>
+            offsets[mav] = new Vector3((float)x, (float)y, (float)z);
 
-        public Vector3 GetOffsets(MAVState mav) =>
-            _offsets.ContainsKey(mav) ? _offsets[mav] : new Vector3(_offsets.Count, 0, 0);
+        public Vector3 getOffsets(MAVState mav) =>
+            offsets.ContainsKey(mav) ? offsets[mav] : new Vector3(offsets.Count, 0, 0);
 
         public override void Update()
         {
@@ -77,25 +77,25 @@ namespace MissionPlanner.Swarm
                 return;
             if (Leader == null)
                 Leader = MainV2.comPort.MAV;
-            _masterPos = new PointLatLngAlt(Leader.cs.lat, Leader.cs.lng, Leader.cs.alt, "");
+            masterpos = new PointLatLngAlt(Leader.cs.lat, Leader.cs.lng, Leader.cs.alt, "");
 
-            // Update dt for filtering by storing the current update time.
-            _lastUpdateTime = DateTime.UtcNow;
+            // Update lastUpdateTime for dt calculation.
+            lastUpdateTime = DateTime.UtcNow;
         }
 
-        // Utility method to wrap an angle into the [-180, 180] range.
-        private double Wrap180(double angle)
+        // Wraps angle to [-180, 180].
+        private double wrap_180(double input)
         {
-            if (angle > 180)
-                return angle - 360;
-            if (angle < -180)
-                return angle + 360;
-            return angle;
+            if (input > 180)
+                return input - 360;
+            if (input < -180)
+                return input + 360;
+            return input;
         }
 
         public override void SendCommand()
         {
-            if (_masterPos.Lat == 0 || _masterPos.Lng == 0)
+            if (masterpos.Lat == 0 || masterpos.Lng == 0)
                 return;
 
             foreach (var port in MainV2.Comports)
@@ -105,16 +105,16 @@ namespace MissionPlanner.Swarm
                     if (mav == Leader)
                         continue;
 
-                    PointLatLngAlt target = new PointLatLngAlt(_masterPos);
+                    PointLatLngAlt target = new PointLatLngAlt(masterpos);
                     try
                     {
-                        // Transform leader's position to UTM and apply follower's position offset.
-                        int utmZone = (int)((_masterPos.Lng + 180.0) / 6.0);
-                        IProjectedCoordinateSystem utm = ProjectedCoordinateSystem.WGS84_UTM(utmZone, _masterPos.Lat >= 0);
-                        var trans = _ctfac.CreateFromCoordinateSystems(_wgs84, utm);
+                        // Transform leader's position to UTM and apply follower's offset.
+                        int utmzone = (int)((masterpos.Lng + 180.0) / 6.0);
+                        IProjectedCoordinateSystem utm = ProjectedCoordinateSystem.WGS84_UTM(utmzone, masterpos.Lat >= 0);
+                        var trans = ctfac.CreateFromCoordinateSystems(wgs84, utm);
                         double[] pLeader = trans.MathTransform.Transform(new double[] { target.Lng, target.Lat });
-                        double heading = -Leader.cs.yaw * MathHelper.Deg2Rad;
-                        Vector3 offset = GetOffsets(mav);
+                        double heading = -Leader.cs.yaw * MathHelper.deg2rad;
+                        Vector3 offset = getOffsets(mav);
                         pLeader[0] += offset.x * Math.Cos(heading) - offset.y * Math.Sin(heading);
                         pLeader[1] += offset.x * Math.Sin(heading) + offset.y * Math.Cos(heading);
                         double[] inv = trans.MathTransform.Inverse().Transform(pLeader);
@@ -124,35 +124,32 @@ namespace MissionPlanner.Swarm
 
                         if (mav.cs.firmware == Firmwares.ArduPlane)
                         {
-                            // Compute yaw error based on target bearing.
-                            double targYaw = mav.cs.Location.GetBearing(target);
-                            double yawError = Wrap180(targYaw - mav.cs.yaw);
+                            // Compute yaw error.
+                            double targyaw = mav.cs.Location.GetBearing(target);
+                            double yawerror = wrap_180(targyaw - mav.cs.yaw);
 
-                            // Use leader's current attitude as desired attitude.
+                            // Use leader's attitude as desired attitude.
                             double desiredRoll = Leader.cs.roll;
                             double desiredPitch = Leader.cs.pitch;
                             double errorRoll = desiredRoll - mav.cs.roll;
                             double errorPitch = desiredPitch - mav.cs.pitch;
 
                             // Compute feedforward payload compensation.
-                            Vector3 payloadComp = _payloadController.CompensateRigidBodyDynamics(Leader, mav, _offsets);
-
-                            // Compute dt as the elapsed time since last update.
-                            // (For a production system, store and update _lastUpdateTime properly.)
-                            float dt = (float)(DateTime.UtcNow - _lastUpdateTime).TotalSeconds;
-                            // If dt is very small (or zero), you may wish to default it to a nominal value.
+                            Vector3 payloadComp = payloadController.CompensateRigidBodyDynamics(Leader, mav, offsets);
+                            // Compute dt as elapsed time since last update.
+                            float dt = (float)(DateTime.UtcNow - lastUpdateTime).TotalSeconds;
                             if (dt <= 0)
-                                dt = 0.1f;
+                                dt = 0.1f; // fallback nominal value
+                            
+                            Vector3 prev = compFiltered.ContainsKey(mav) ? compFiltered[mav] : Vector3.Zero;
+                            float alpha = dt / (compTau + dt);
+                            Vector3 filteredComp = prev + (payloadComp - prev) * alpha;
+                            compFiltered[mav] = filteredComp;
+                            float ffRoll = (float)MathHelper.constrain(filteredComp.x * payloadGain, -maxRollComp, maxRollComp);
+                            float ffPitch = (float)MathHelper.constrain(filteredComp.y * payloadGain, -maxPitchComp, maxPitchComp);
 
-                            Vector3 prevFiltered = _compFiltered.ContainsKey(mav) ? _compFiltered[mav] : Vector3.Zero;
-                            float alpha = dt / (CompTau + dt);
-                            Vector3 filteredComp = prevFiltered + (payloadComp - prevFiltered) * alpha;
-                            _compFiltered[mav] = filteredComp;
-                            float ffRoll = (float)MathHelper.Constrain(filteredComp.x * PayloadGain, -MaxRollComp, MaxRollComp);
-                            float ffPitch = (float)MathHelper.Constrain(filteredComp.y * PayloadGain, -MaxPitchComp, MaxPitchComp);
-
-                            // Compute PID feedback corrections based on the computed attitude errors.
-                            if (!_pids.TryGetValue(mav, out Tuple<PID, PID, PID, PID> pidTuple))
+                            // Compute PID feedback corrections.
+                            if (!pids.TryGetValue(mav, out Tuple<PID, PID, PID, PID> pidTuple))
                             {
                                 pidTuple = new Tuple<PID, PID, PID, PID>(
                                     new PID(1f, 0.03f, 0.02f, 10, 20, 0.1f, 0),  // roll PID
@@ -160,23 +157,23 @@ namespace MissionPlanner.Swarm
                                     new PID(1f, 0.0f, 0.0f, 15, 20, 0.1f, 0),     // yaw PID (if needed)
                                     new PID(0.01f, 0.001f, 0, 0.5f, 20, 0.1f, 0)   // thrust PID (if used)
                                 );
-                                _pids[mav] = pidTuple;
+                                pids[mav] = pidTuple;
                             }
                             PID rollPID = pidTuple.Item1;
                             PID pitchPID = pidTuple.Item2;
-                            rollPID.SetInputFilterAll((float)errorRoll);
-                            pitchPID.SetInputFilterAll((float)errorPitch);
-                            double fbRoll = rollPID.GetPID();
-                            double fbPitch = pitchPID.GetPID();
+                            rollPID.set_input_filter_all((float)errorRoll);
+                            pitchPID.set_input_filter_all((float)errorPitch);
+                            double fbRoll = rollPID.get_pid();
+                            double fbPitch = pitchPID.get_pid();
 
-                            // Combine the feedback (PID) and feedforward compensation terms.
-                            double finalRoll = fbRoll + (ffRoll * BlendAlpha);
-                            double finalPitch = fbPitch + (ffPitch * BlendAlpha);
+                            // Combine PID feedback with feedforward compensation.
+                            double finalRoll = fbRoll + (ffRoll * blendAlpha);
+                            double finalPitch = fbPitch + (ffPitch * blendAlpha);
 
-                            // Form the final attitude command as a quaternion.
-                            Quaternion q = Quaternion.from_euler312(finalRoll * MathHelper.Deg2Rad,
-                                                                      finalPitch * MathHelper.Deg2Rad,
-                                                                      (float)yawError * MathHelper.Deg2Rad);
+                            // Form the final attitude command.
+                            Quaternion q = Quaternion.from_euler312(finalRoll * MathHelper.deg2rad,
+                                                                     finalPitch * MathHelper.deg2rad,
+                                                                     (float)yawerror * MathHelper.deg2rad);
                             var att = new MAVLink.mavlink_set_attitude_target_t
                             {
                                 target_system = mav.sysid,
@@ -209,7 +206,7 @@ namespace MissionPlanner.Swarm
     internal class PID
     {
         private float _dt;
-        private readonly float _m2Pi = (float)(Math.PI * 2);
+        private readonly float M_2PI = (float)(Math.PI * 2);
         private float _input;
         private float _derivative;
         private float _kp;
@@ -218,69 +215,68 @@ namespace MissionPlanner.Swarm
         private float _imax;
         private float _kd;
         private float _ff;
-        private float _filtHz = AcPidFiltHzDefault;
-        private const float AcPidFiltHzDefault = 20.0f;
-        private const float AcPidFiltHzMin = 0.01f;
+        private float _filt_hz = AC_PID_FILT_HZ_DEFAULT;
+        const float AC_PID_FILT_HZ_DEFAULT = 20.0f;
+        const float AC_PID_FILT_HZ_MIN = 0.01f;
 
-        public PID(float initialP, float initialI, float initialD, float initialIMax, float initialFiltHz, float dt, float initialFF)
+        public PID(float initial_p, float initial_i, float initial_d, float initial_imax, float initial_filt_hz, float dt, float initial_ff)
         {
             _dt = dt;
             _integrator = 0;
             _input = 0;
             _derivative = 0;
-            _kp = initialP;
-            _ki = initialI;
-            _kd = initialD;
-            _imax = Math.Abs(initialIMax);
-            FiltHz(initialFiltHz);
-            _ff = initialFF;
-            _flags._resetFilter = true;
+            _kp = initial_p;
+            _ki = initial_i;
+            _kd = initial_d;
+            _imax = Math.Abs(initial_imax);
+            filt_hz(initial_filt_hz);
+            _ff = initial_ff;
+            _flags._reset_filter = true;
         }
-
-        public void SetDt(float dt) => _dt = dt;
-        public void FiltHz(float hz) => _filtHz = Math.Max(hz, AcPidFiltHzMin);
-        public void SetInputFilterAll(float input)
+        public void set_dt(float dt) => _dt = dt;
+        public void filt_hz(float hz) => _filt_hz = Math.Max(hz, AC_PID_FILT_HZ_MIN);
+        public void set_input_filter_all(float input)
         {
-            if (!IsFinite(input))
+            if (!isfinite(input))
                 return;
-            if (_flags._resetFilter)
+            if (_flags._reset_filter)
             {
-                _flags._resetFilter = false;
+                _flags._reset_filter = false;
                 _input = input;
                 _derivative = 0;
             }
-            float change = GetFiltAlpha() * (input - _input);
+            float change = get_filt_alpha() * (input - _input);
             _input += change;
             if (_dt > 0)
                 _derivative = change / _dt;
         }
-        private bool IsFinite(float x) => !float.IsInfinity(x);
-        public float GetP() { _pidInfo.P = _input * _kp; return _pidInfo.P; }
-        public float GetI()
+        private bool isfinite(float x) => !float.IsInfinity(x);
+        public float get_p() { _pid_info.P = _input * _kp; return _pid_info.P; }
+        public float get_i()
         {
             if (_ki != 0 && _dt != 0)
             {
                 _integrator += (_input * _ki) * _dt;
-                _integrator = (float)MathHelper.Constrain(_integrator, -_imax, _imax);
-                _pidInfo.I = _integrator;
+                _integrator = (float)MathHelper.constrain(_integrator, -_imax, _imax);
+                _pid_info.I = _integrator;
                 return _integrator;
             }
             return 0;
         }
-        public float GetD() { _pidInfo.D = _kd * _derivative; return _pidInfo.D; }
-        public float GetPID() => GetP() + GetI() + GetD();
-        public void ResetI() => _integrator = 0;
-        public float GetFiltAlpha() => _filtHz == 0 ? 1f : _dt / (_dt + 1f / (_m2Pi * _filtHz));
-        internal class Flags { internal bool _resetFilter; }
-        private Flags _flags = new Flags();
-        private PIDInfo _pidInfo = new PIDInfo();
-        internal class PIDInfo { internal float P, I, D, FF; }
+        public float get_d() { _pid_info.D = _kd * _derivative; return _pid_info.D; }
+        public float get_pid() => get_p() + get_i() + get_d();
+        public void reset_I() => _integrator = 0;
+        public float get_filt_alpha() => _filt_hz == 0 ? 1f : _dt / (_dt + 1f / (M_2PI * _filt_hz));
+        internal class flags { internal bool _reset_filter; }
+        private flags _flags = new flags();
+        private pid_info _pid_info = new pid_info();
+        internal class pid_info { internal float P, I, D, FF; }
     }
 
     // --- LoadAttitudeController Implementation ---
     internal class LoadAttitudeController
     {
-        public double PayloadMass { get; set; } = SwarmConstants.DefaultLeaderMass;
+        public double PayloadMass { get; set; } = SwarmConstants.DEFAULT_LEADER_MASS;
 
         // Payload inertia matrix JL (kg·m²)
         private static readonly Matrix<double> PayloadInertia = Matrix<double>.Build.DenseOfArray(new double[,]
@@ -327,7 +323,9 @@ namespace MissionPlanner.Swarm
             {
                 var r = pts[i];
                 var qi = VectorUtils.NormalizeVector(r);
-                Phi[0, i] = qi.x; Phi[1, i] = qi.y; Phi[2, i] = qi.z;
+                Phi[0, i] = qi.x; 
+                Phi[1, i] = qi.y; 
+                Phi[2, i] = qi.z;
                 Phi[3, i] = r.y * qi.z - r.z * qi.y;
                 Phi[4, i] = r.z * qi.x - r.x * qi.z;
                 Phi[5, i] = r.x * qi.y - r.y * qi.x;
@@ -365,9 +363,9 @@ namespace MissionPlanner.Swarm
 
         private Matrix<double> BuildRotationMatrix(float roll, float pitch, float yaw)
         {
-            double r = roll * MathHelper.Deg2Rad;
-            double p = pitch * MathHelper.Deg2Rad;
-            double y = yaw * MathHelper.Deg2Rad;
+            double r = roll * MathHelper.deg2rad;
+            double p = pitch * MathHelper.deg2rad;
+            double y = yaw * MathHelper.deg2rad;
 
             double cr = Math.Cos(r), sr = Math.Sin(r);
             double cp = Math.Cos(p), sp = Math.Sin(p);
