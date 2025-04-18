@@ -152,12 +152,12 @@ namespace MissionPlanner.Swarm
             out Matrix<double> nullspace)
         {
             float m = PayloadMass;
-            var accel = Vector<double>.Build.Dense(new[] {
-                leader.cs.ax * m,
-                leader.cs.ay * m,
-                (leader.cs.az + 9.81f) * m
+            var accel = Vector<double>.Build.Dense(new double[] {
+                (double)leader.cs.ax * m,
+                (double)leader.cs.ay * m,
+                (double)(leader.cs.az + 9.81f) * m
             });
-            var grav = Vector<double>.Build.Dense(new[] { 0.0, 0.0, -9.81 }) * m;
+            var grav = Vector<double>.Build.Dense(new double[] { 0.0, 0.0, -9.81 }) * (double)m;
             var R = BuildRotation(leader.cs.roll, leader.cs.pitch, leader.cs.yaw);
             var Wf = -R.Transpose() * (accel + grav);
             var omega = Vector<double>.Build.Dense(3);
@@ -243,7 +243,7 @@ namespace MissionPlanner.Swarm
         private PointLatLngAlt masterpos = new PointLatLngAlt();
         private DateTime lastTime = DateTime.UtcNow;
 
-        // --- Adaptive control constants ---
+        // --- Adaptive Control Constants ---
         private const float sigma = 0.1f;
         private const float Kp0 = 1f, Ki0 = 0.1f, Kd0 = 0.01f;
         private const float Kv0 = 1f;
