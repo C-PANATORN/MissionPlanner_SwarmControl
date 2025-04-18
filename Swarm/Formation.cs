@@ -234,8 +234,18 @@ namespace MissionPlanner.Swarm
 
         // Getter for offsets
         public Vector3Wrapper GetOffsets(MAVState m)
-            => offsets.TryGetValue(m, out var w) ? w : Vector3Wrapper.Zero;
+    => offsets.TryGetValue(m, out var w) ? w : Vector3Wrapper.Zero;
 
+        // Override Swarm.Update() refresh leader position and timestamp
+        public override void Update()
+        {
+            if (MainV2.comPort.MAV.cs.lat == 0 || MainV2.comPort.MAV.cs.lng == 0)
+                return;
+            if (Leader == null)
+                Leader = MainV2.comPort.MAV;
+            masterpos = new PointLatLngAlt(Leader.cs.lat, Leader.cs.lng, Leader.cs.alt, "");
+            lastTime = DateTime.UtcNow;
+        }
 
         public override void SendCommand()
         {
