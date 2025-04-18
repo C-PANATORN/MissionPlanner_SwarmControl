@@ -1,401 +1,318 @@
 ﻿using System;
 using System.Collections.Generic;
 using MathNet.Numerics.LinearAlgebra;
-using MissionPlanner.ArduPilot;
-using MissionPlanner.Utilities;
 using ProjNet.CoordinateSystems;
 using ProjNet.CoordinateSystems.Transformations;
 using GeoAPI.CoordinateSystems;
 using GeoAPI.CoordinateSystems.Transformations;
-using Vector3 = MissionPlanner.Utilities.Vector3;
+using MissionPlanner.ArduPilot;
+using MissionPlanner.Utilities;
 
 namespace MissionPlanner.Swarm
 {
+    // --- Geodetic Transform Helpers ---
+    internal static class GeoHelper
+    {
+        private static readonly IGeographicCoordinateSystem _wgs84 = GeographicCoordinateSystem.WGS84;
+        private static readonly CoordinateTransformationFactory _ctfac = new CoordinateTransformationFactory();
 
-    // Helper class for math functions.
+        public static (double x, double y, int zone, bool north) LatLonToUtm(double lat, double lon)
+        {
+            int zone = (int)((lon + 180.0) / 6.0) + 1;
+            bool northern = lat >= 0;
+            var utm = ProjectedCoordinateSystem.WGS84_UTM(zone, northern);
+            var trans = _ctfac.CreateFromCoordinateSystems(_wgs84, utm);
+            double[] xy = trans.MathTransform.Transform(new double[] { lon, lat });
+            return (xy[0], xy[1], zone, northern);
+        }
+
+        public static (double lat, double lon) UtmToLatLon(double x, double y, int zone, bool northern)
+        {
+            var utm = ProjectedCoordinateSystem.WGS84_UTM(zone, northern);
+            var trans = _ctfac.CreateFromCoordinateSystems(utm, _wgs84);
+            double[] ll = trans.MathTransform.Transform(new double[] { x, y });
+            return (ll[1], ll[0]);
+        }
+    }
+
+    // --- Basic 3D Vector and Wrapper ---
+    public class Vector3
+    {
+        public float X { get; set; }
+        public float Y { get; set; }
+        public float Z { get; set; }
+        public Vector3(float x, float y, float z) { X = x; Y = y; Z = z; }
+        public static Vector3 Zero => new Vector3(0f, 0f, 0f);
+        public Vector3 Multiply(float s) => new Vector3(X * s, Y * s, Z * s);
+    }
+
+    public class Vector3Wrapper
+    {
+        public Vector3 V { get; private set; }
+        public Vector3Wrapper(float x, float y, float z) { V = new Vector3(x, y, z); }
+        public static Vector3Wrapper Add(Vector3Wrapper a, Vector3Wrapper b) =>
+            new Vector3Wrapper(a.V.X + b.V.X, a.V.Y + b.V.Y, a.V.Z + b.V.Z);
+        public static Vector3Wrapper Multiply(Vector3Wrapper v, float s) =>
+            new Vector3Wrapper(v.V.X * s, v.V.Y * s, v.V.Z * s);
+        public static Vector3Wrapper Zero => new Vector3Wrapper(0f, 0f, 0f);
+    }
+
+    // --- PID with Sigma Modification (P, I, D) ---
+    internal class PIDController
+    {
+        public float Kp, Ki, Kd;
+        public float lastError;
+        private float integrator;
+
+        public PIDController(float kp, float ki, float kd)
+        {
+            Kp = kp; Ki = ki; Kd = kd;
+            integrator = 0f; lastError = 0f;
+        }
+
+        public float Step(float error, float dError, float dt)
+        {
+            integrator += error * dt;
+            return Kp * error + Ki * integrator + Kd * dError;
+        }
+
+        public void ClampLower(float kpMin, float kiMin, float kdMin)
+        {
+            if (Kp < kpMin) Kp = kpMin;
+            if (Ki < kiMin) Ki = kiMin;
+            if (Kd < kdMin) Kd = kdMin;
+        }
+    }
+
+    // --- Utility Math ---
     internal static class MathHelper
     {
-        public const double deg2rad = Math.PI / 180.0;
-        public const double rad2deg = 180.0 / Math.PI;
-        public static double constrain(double value, double min, double max)
-        {
-            if (value < min)
-                return min;
-            if (value > max)
-                return max;
-            return value;
-        }
+        public const double Deg2Rad = Math.PI / 180.0;
+        public const double Rad2Deg = 180.0 / Math.PI;
+        public static float Constrain(float v, float min, float max) => v < min ? min : v > max ? max : v;
     }
 
-    // Helper class for vector normalization.
     internal static class VectorUtils
     {
-        public static Vector3 NormalizeVector(Vector3 v)
+        public static Vector3Wrapper Normalize(Vector3Wrapper w)
         {
-            double len = Math.Sqrt(v.x * v.x + v.y * v.y + v.z * v.z);
-            return len == 0 ? Vector3.Zero : new Vector3((float)(v.x / len), (float)(v.y / len), (float)(v.z / len));
+            var v = w.V;
+            double len = Math.Sqrt((double)v.X * v.X + (double)v.Y * v.Y + (double)v.Z * v.Z);
+            if (len <= 0) return Vector3Wrapper.Zero;
+            float inv = 1f / (float)len;
+            return new Vector3Wrapper(v.X * inv, v.Y * inv, v.Z * inv);
         }
+        public static float Length(Vector3 v) => (float)Math.Sqrt(v.X * v.X + v.Y * v.Y + v.Z * v.Z);
+        public static float LengthSquared(Vector3 v) => v.X * v.X + v.Y * v.Y + v.Z * v.Z;
     }
 
+    // --- Swarm Constants ---
     internal static class SwarmConstants
     {
-        public const float DEFAULT_LEADER_MASS = 1.0f;
+        public const float PayloadMass = 1.0f;   // Payload mass (kg)
+        public const float DroneMass = 1.5f;     // Individual drone mass (kg)
+        public const float CableLength = 2.0f;   // Cable length (m)
     }
 
-    // Formation class using original naming conventions.
-    internal class Formation : Swarm
-    {
-        private readonly Dictionary<MAVState, Vector3> offsets = new Dictionary<MAVState, Vector3>();
-        private readonly Dictionary<MAVState, Tuple<PID, PID, PID, PID>> pids = new Dictionary<MAVState, Tuple<PID, PID, PID, PID>>();
-        private readonly Dictionary<MAVState, Vector3> compFiltered = new Dictionary<MAVState, Vector3>();
-        private PointLatLngAlt masterpos = new PointLatLngAlt();
-        private readonly LoadAttitudeController payloadController = new LoadAttitudeController();
-
-        // Feedforward parameters.
-        private const float payloadGain = 0.5f;
-        private const float maxRollComp = 10f;
-        private const float maxPitchComp = 10f;
-        private const float compTau = 0.2f;
-        private const float blendAlpha = 0.7f;
-
-        // Coordinate transformation members.
-        private readonly CoordinateTransformationFactory ctfac = new CoordinateTransformationFactory();
-        private readonly IGeographicCoordinateSystem wgs84 = GeographicCoordinateSystem.WGS84;
-
-        // For proper dt calculation, you can store the last update time.
-        private DateTime lastUpdateTime = DateTime.UtcNow;
-
-        public void setOffsets(MAVState mav, double x, double y, double z) =>
-            offsets[mav] = new Vector3((float)x, (float)y, (float)z);
-
-        public Vector3 getOffsets(MAVState mav) =>
-            offsets.ContainsKey(mav) ? offsets[mav] : new Vector3(offsets.Count, 0, 0);
-
-        public override void Update()
-        {
-            if (MainV2.comPort.MAV.cs.lat == 0 || MainV2.comPort.MAV.cs.lng == 0)
-                return;
-            if (Leader == null)
-                Leader = MainV2.comPort.MAV;
-            masterpos = new PointLatLngAlt(Leader.cs.lat, Leader.cs.lng, Leader.cs.alt, "");
-
-            // Update lastUpdateTime for dt calculation.
-            lastUpdateTime = DateTime.UtcNow;
-        }
-
-        // Wraps angle to [-180, 180].
-        private double wrap_180(double input)
-        {
-            if (input > 180)
-                return input - 360;
-            if (input < -180)
-                return input + 360;
-            return input;
-        }
-
-        public override void SendCommand()
-        {
-            if (masterpos.Lat == 0 || masterpos.Lng == 0)
-                return;
-
-            foreach (var port in MainV2.Comports)
-            {
-                foreach (var mav in port.MAVlist)
-                {
-                    if (mav == Leader)
-                        continue;
-
-                    PointLatLngAlt target = new PointLatLngAlt(masterpos);
-                    try
-                    {
-                        // Transform leader's position to UTM and apply follower's offset.
-                        int utmzone = (int)((masterpos.Lng + 180.0) / 6.0);
-                        IProjectedCoordinateSystem utm = ProjectedCoordinateSystem.WGS84_UTM(utmzone, masterpos.Lat >= 0);
-                        var trans = ctfac.CreateFromCoordinateSystems(wgs84, utm);
-                        double[] pLeader = trans.MathTransform.Transform(new double[] { target.Lng, target.Lat });
-                        double heading = -Leader.cs.yaw * MathHelper.deg2rad;
-                        Vector3 offset = getOffsets(mav);
-                        pLeader[0] += offset.x * Math.Cos(heading) - offset.y * Math.Sin(heading);
-                        pLeader[1] += offset.x * Math.Sin(heading) + offset.y * Math.Cos(heading);
-                        double[] inv = trans.MathTransform.Inverse().Transform(pLeader);
-                        target.Lat = inv[1];
-                        target.Lng = inv[0];
-                        target.Alt += offset.z;
-
-                        if (mav.cs.firmware == Firmwares.ArduPlane)
-                        {
-                            // Compute yaw error.
-                            double targyaw = mav.cs.Location.GetBearing(target);
-                            double yawerror = wrap_180(targyaw - mav.cs.yaw);
-
-                            // Use leader's attitude as desired attitude.
-                            double desiredRoll = Leader.cs.roll;
-                            double desiredPitch = Leader.cs.pitch;
-                            double errorRoll = desiredRoll - mav.cs.roll;
-                            double errorPitch = desiredPitch - mav.cs.pitch;
-
-                            // Compute feedforward payload compensation.
-                            Vector3 payloadComp = payloadController.CompensateRigidBodyDynamics(Leader, mav, offsets);
-                            // Compute dt as elapsed time since last update.
-                            float dt = (float)(DateTime.UtcNow - lastUpdateTime).TotalSeconds;
-                            if (dt <= 0)
-                                dt = 0.1f; // fallback nominal value
-                            
-                            Vector3 prev = compFiltered.ContainsKey(mav) ? compFiltered[mav] : Vector3.Zero;
-                            float alpha = dt / (compTau + dt);
-                            Vector3 filteredComp = prev + (payloadComp - prev) * alpha;
-                            compFiltered[mav] = filteredComp;
-                            float ffRoll = (float)MathHelper.constrain(filteredComp.x * payloadGain, -maxRollComp, maxRollComp);
-                            float ffPitch = (float)MathHelper.constrain(filteredComp.y * payloadGain, -maxPitchComp, maxPitchComp);
-
-                            // Compute PID feedback corrections.
-                            if (!pids.TryGetValue(mav, out Tuple<PID, PID, PID, PID> pidTuple))
-                            {
-                                pidTuple = new Tuple<PID, PID, PID, PID>(
-                                    new PID(1f, 0.03f, 0.02f, 10, 20, 0.1f, 0),  // roll PID
-                                    new PID(1f, 0.03f, 0.02f, 10, 20, 0.1f, 0),  // pitch PID
-                                    new PID(1f, 0.0f, 0.0f, 15, 20, 0.1f, 0),     // yaw PID (if needed)
-                                    new PID(0.01f, 0.001f, 0, 0.5f, 20, 0.1f, 0)   // thrust PID (if used)
-                                );
-                                pids[mav] = pidTuple;
-                            }
-                            PID rollPID = pidTuple.Item1;
-                            PID pitchPID = pidTuple.Item2;
-                            rollPID.set_input_filter_all((float)errorRoll);
-                            pitchPID.set_input_filter_all((float)errorPitch);
-                            double fbRoll = rollPID.get_pid();
-                            double fbPitch = pitchPID.get_pid();
-
-                            // Combine PID feedback with feedforward compensation.
-                            double finalRoll = fbRoll + (ffRoll * blendAlpha);
-                            double finalPitch = fbPitch + (ffPitch * blendAlpha);
-
-                            // Form the final attitude command.
-                            Quaternion q = Quaternion.from_euler312(finalRoll * MathHelper.deg2rad,
-                                                                     finalPitch * MathHelper.deg2rad,
-                                                                     (float)yawerror * MathHelper.deg2rad);
-                            var att = new MAVLink.mavlink_set_attitude_target_t
-                            {
-                                target_system = mav.sysid,
-                                target_component = mav.compid,
-                                type_mask = 0b10000101,
-                                q = new float[] { (float)q.q1, (float)q.q2, (float)q.q3, (float)q.q4 }
-                            };
-                            port.sendPacket(att, mav.sysid, mav.compid);
-                        }
-                        else
-                        {
-                            // For non-ArduPlane firmware, issue a position target command.
-                            Vector3 vel = new Vector3(Leader.cs.vx, Leader.cs.vy, Leader.cs.vz);
-                            port.setPositionTargetGlobalInt(mav.sysid, mav.compid, true, true, false, false,
-                                MAVLink.MAV_FRAME.GLOBAL_RELATIVE_ALT_INT,
-                                target.Lat, target.Lng, target.Alt,
-                                vel.x, vel.y, vel.z, 0, 0);
-                        }
-                    }
-                    catch (Exception ex)
-                    {
-                        Console.WriteLine("SendCommand failed: " + ex);
-                    }
-                }
-            }
-        }
-    }
-
-    // --- PID Controller Implementation ---
-    internal class PID
-    {
-        private float _dt;
-        private readonly float M_2PI = (float)(Math.PI * 2);
-        private float _input;
-        private float _derivative;
-        private float _kp;
-        private float _ki;
-        private float _integrator;
-        private float _imax;
-        private float _kd;
-        private float _ff;
-        private float _filt_hz = AC_PID_FILT_HZ_DEFAULT;
-        const float AC_PID_FILT_HZ_DEFAULT = 20.0f;
-        const float AC_PID_FILT_HZ_MIN = 0.01f;
-
-        public PID(float initial_p, float initial_i, float initial_d, float initial_imax, float initial_filt_hz, float dt, float initial_ff)
-        {
-            _dt = dt;
-            _integrator = 0;
-            _input = 0;
-            _derivative = 0;
-            _kp = initial_p;
-            _ki = initial_i;
-            _kd = initial_d;
-            _imax = Math.Abs(initial_imax);
-            filt_hz(initial_filt_hz);
-            _ff = initial_ff;
-            _flags._reset_filter = true;
-        }
-        public void set_dt(float dt) => _dt = dt;
-        public void filt_hz(float hz) => _filt_hz = Math.Max(hz, AC_PID_FILT_HZ_MIN);
-        public void set_input_filter_all(float input)
-        {
-            if (!isfinite(input))
-                return;
-            if (_flags._reset_filter)
-            {
-                _flags._reset_filter = false;
-                _input = input;
-                _derivative = 0;
-            }
-            float change = get_filt_alpha() * (input - _input);
-            _input += change;
-            if (_dt > 0)
-                _derivative = change / _dt;
-        }
-        private bool isfinite(float x) => !float.IsInfinity(x);
-        public float get_p() { _pid_info.P = _input * _kp; return _pid_info.P; }
-        public float get_i()
-        {
-            if (_ki != 0 && _dt != 0)
-            {
-                _integrator += (_input * _ki) * _dt;
-                _integrator = (float)MathHelper.constrain(_integrator, -_imax, _imax);
-                _pid_info.I = _integrator;
-                return _integrator;
-            }
-            return 0;
-        }
-        public float get_d() { _pid_info.D = _kd * _derivative; return _pid_info.D; }
-        public float get_pid() => get_p() + get_i() + get_d();
-        public void reset_I() => _integrator = 0;
-        public float get_filt_alpha() => _filt_hz == 0 ? 1f : _dt / (_dt + 1f / (M_2PI * _filt_hz));
-        internal class flags { internal bool _reset_filter; }
-        private flags _flags = new flags();
-        private pid_info _pid_info = new pid_info();
-        internal class pid_info { internal float P, I, D, FF; }
-    }
-
-    // --- LoadAttitudeController Implementation ---
+    // --- Load Attitude Controller ---
     internal class LoadAttitudeController
     {
-        public double PayloadMass { get; set; } = SwarmConstants.DEFAULT_LEADER_MASS;
+        public float PayloadMass = SwarmConstants.PayloadMass;
+        private static readonly Matrix<double> Iinertia =
+            Matrix<double>.Build.DenseOfArray(new double[,] {
+                { 0.021, 0.0,   0.0   },
+                { 0.0,   0.0187,0.0   },
+                { 0.0,   0.0,   0.0397}
+            });
 
-        // Payload inertia matrix JL (kg·m²)
-        private static readonly Matrix<double> PayloadInertia = Matrix<double>.Build.DenseOfArray(new double[,]
+        public Vector3Wrapper Compensate(
+            MAVState leader,
+            MAVState follower,
+            Dictionary<MAVState, Vector3Wrapper> offsets,
+            out Matrix<double> nullspaceBasis)
         {
-            { 0.021, 0, 0 },
-            { 0, 0.0187, 0 },
-            { 0, 0, 0.0397 }
-        });
-
-        private static readonly Dictionary<int, Tuple<float, float>> YawHistory = new Dictionary<int, Tuple<float, float>>();
-
-        public Vector3 CompensateRigidBodyDynamics(MAVState leader, MAVState follower, Dictionary<MAVState, Vector3> offsets)
-        {
-            if (!offsets.ContainsKey(follower))
-                return Vector3.Zero;
-
-            var pts = new List<Vector3>(offsets.Values);
-            if (pts.Count < 3)
-                return Vector3.Zero;
-
-            var staticOffset = offsets[follower];
-
-            float yawRate = EstimateYawRate(leader);
-            float compTau = Math.Abs(yawRate) > 10 ? 0.05f : 0.2f;
-            float dt = 0.05f;
-            float alpha = dt / (compTau + dt);
-
-            float m = (float)PayloadMass;
-            var accel = Vector<double>.Build.DenseOfArray(new double[] { leader.cs.ax * m, leader.cs.ay * m, (leader.cs.az + 9.81f) * m });
-            var grav = Vector<double>.Build.DenseOfArray(new double[] { 0, 0, -9.81 }) * m;
-            var R = BuildRotationMatrix(leader.cs.roll, leader.cs.pitch, leader.cs.yaw);
+            float m = PayloadMass;
+            var accel = Vector<double>.Build.Dense(new double[] {
+                leader.cs.ax * m,
+                leader.cs.ay * m,
+                (leader.cs.az + 9.81f) * m
+            });
+            var grav = Vector<double>.Build.Dense(new double[] { 0.0, 0.0, -9.81 }) * m;
+            var R = BuildRot(leader.cs.roll, leader.cs.pitch, leader.cs.yaw);
             var Wf = -R.Transpose() * (accel + grav);
-
             var omega = Vector<double>.Build.Dense(3);
-            var omegaDot = Vector<double>.Build.Dense(3);
-            var Wm = -(PayloadInertia * omegaDot + Cross(omega, PayloadInertia * omega));
-
+            var Wm = -(Iinertia * Vector<double>.Build.Dense(3) + Cross(omega, Iinertia * omega));
             var W = Vector<double>.Build.Dense(6);
             W.SetSubVector(0, 3, Wf);
             W.SetSubVector(3, 3, Wm);
 
-            var Phi = Matrix<double>.Build.Dense(6, pts.Count);
-            for (int i = 0; i < pts.Count; i++)
+            var pts = new List<Vector3Wrapper>(offsets.Values);
+            int n = pts.Count;
+            var Phi = Matrix<double>.Build.Dense(6, n);
+            for (int i = 0; i < n; i++)
             {
-                var r = pts[i];
-                var qi = VectorUtils.NormalizeVector(r);
-                Phi[0, i] = qi.x; 
-                Phi[1, i] = qi.y; 
-                Phi[2, i] = qi.z;
-                Phi[3, i] = r.y * qi.z - r.z * qi.y;
-                Phi[4, i] = r.z * qi.x - r.x * qi.z;
-                Phi[5, i] = r.x * qi.y - r.y * qi.x;
+                var orig = pts[i].V;
+                float curLen = VectorUtils.Length(orig);
+                var rvec = curLen > 0
+                    ? new Vector3(
+                          orig.X * (SwarmConstants.CableLength / curLen),
+                          orig.Y * (SwarmConstants.CableLength / curLen),
+                          orig.Z * (SwarmConstants.CableLength / curLen)
+                      )
+                    : orig;
+                var qi3 = VectorUtils.Normalize(new Vector3Wrapper(rvec.X, rvec.Y, rvec.Z)).V;
+                Phi[0, i] = qi3.X; Phi[1, i] = qi3.Y; Phi[2, i] = qi3.Z;
+                Phi[3, i] = rvec.Y * qi3.Z - rvec.Z * qi3.Y;
+                Phi[4, i] = rvec.Z * qi3.X - rvec.X * qi3.Z;
+                Phi[5, i] = rvec.X * qi3.Y - rvec.Y * qi3.X;
             }
 
-            var T = Phi.PseudoInverse() * W;
+            var pinv = Phi.PseudoInverse();
+            var svd = Phi.Svd(true);
+            nullspaceBasis = svd.VT.Transpose().SubMatrix(0, n, 6, n - 6);
+            var Tp = pinv * W;
+            var lambda = Vector<double>.Build.Dense(n - 6);
+            var T = Tp + nullspaceBasis * lambda;
+
             int idx = new List<MAVState>(offsets.Keys).IndexOf(follower);
-            if (idx >= 0 && idx < T.Count)
-            {
-                var qi = VectorUtils.NormalizeVector(staticOffset);
-                return qi * (float)Math.Max(0, T[idx]) * alpha;
-            }
+            if (idx < 0 || idx >= T.Count)
+                return Vector3Wrapper.Zero;
 
-            return Vector3.Zero;
+            var soff = offsets[follower].V;
+            var so3 = VectorUtils.Normalize(new Vector3Wrapper(soff.X, soff.Y, soff.Z)).V;
+            float alpha = 0.2f;
+            float tension = (float)Math.Max(0, T[idx]);
+            return new Vector3Wrapper(
+                so3.X * tension * alpha,
+                so3.Y * tension * alpha,
+                so3.Z * tension * alpha
+            );
         }
 
-        private float EstimateYawRate(MAVState leader)
+        private Matrix<double> BuildRot(float roll, float pitch, float yaw)
         {
-            int id = leader.sysid;
-            float currentYaw = leader.cs.yaw;
-            float currentTime = (float)(DateTime.UtcNow - new DateTime(1970, 1, 1)).TotalSeconds;
-
-            if (YawHistory.ContainsKey(id))
-            {
-                var entry = YawHistory[id];
-                float dyaw = Wrap180(currentYaw - entry.Item1);
-                float dt = currentTime - entry.Item2;
-                YawHistory[id] = Tuple.Create(currentYaw, currentTime);
-                return dt > 0.001f ? dyaw / dt : 0f;
-            }
-
-            YawHistory[id] = Tuple.Create(currentYaw, currentTime);
-            return 0f;
-        }
-
-        private Matrix<double> BuildRotationMatrix(float roll, float pitch, float yaw)
-        {
-            double r = roll * MathHelper.deg2rad;
-            double p = pitch * MathHelper.deg2rad;
-            double y = yaw * MathHelper.deg2rad;
-
+            double r = roll * MathHelper.Deg2Rad;
+            double p = pitch * MathHelper.Deg2Rad;
+            double y = yaw * MathHelper.Deg2Rad;
             double cr = Math.Cos(r), sr = Math.Sin(r);
             double cp = Math.Cos(p), sp = Math.Sin(p);
             double cy = Math.Cos(y), sy = Math.Sin(y);
-
-            return Matrix<double>.Build.DenseOfArray(new double[,]
-            {
+            return Matrix<double>.Build.DenseOfArray(new double[,] {
                 { cy * cp, cy * sp * sr - sy * cr, cy * sp * cr + sy * sr },
                 { sy * cp, sy * sp * sr + cy * cr, sy * sp * cr - cy * sr },
-                { -sp, cp * sr, cp * cr }
+                { -sp,     cp * sr,                cp * cr           }
             });
         }
 
         private Vector<double> Cross(Vector<double> a, Vector<double> b)
         {
-            return Vector<double>.Build.DenseOfArray(new double[]
-            {
+            return Vector<double>.Build.Dense(new double[] {
                 a[1] * b[2] - a[2] * b[1],
                 a[2] * b[0] - a[0] * b[2],
                 a[0] * b[1] - a[1] * b[0]
             });
         }
+    }
 
-        private float Wrap180(float angle)
+    // --- Formation Controller ---
+    internal class Formation : Swarm
+    {
+        private Dictionary<MAVState, Vector3Wrapper> offsets = new Dictionary<MAVState, Vector3Wrapper>();
+        private Dictionary<MAVState, (PIDController roll, PIDController pitch)> pids = new Dictionary<MAVState, (PIDController, PIDController)>();
+        private LoadAttitudeController loadCtrl = new LoadAttitudeController();
+        private PointLatLngAlt masterpos = new PointLatLngAlt();
+        private DateTime lastTime = DateTime.UtcNow;
+
+        // Adaptive control constants
+        private const float sigma = 0.1f;                           // σ‑modification rate 
+        private const float Kp0 = 1f, Ki0 = 0.1f, Kd0 = 0.01f;      // position gain
+        private const float Kv0 = 1f;                               // velocity gain
+        private const float Gi = 0.1f, Gd = 0.01f;                  // adaptation rate 
+
+        public void SetOffsets(MAVState m, float x, float y, float z)
+            => offsets[m] = new Vector3Wrapper(x, y, z);
+
+        public override void Update()
         {
-            if (angle > 180)
-                return angle - 360;
-            if (angle < -180)
-                return angle + 360;
-            return angle;
+            if (MainV2.comPort.MAV.cs.lat == 0 || MainV2.comPort.MAV.cs.lng == 0) return;
+            if (Leader == null) Leader = MainV2.comPort.MAV;
+            masterpos = new PointLatLngAlt(Leader.cs.lat, Leader.cs.lng, Leader.cs.alt, "");
+            lastTime = DateTime.UtcNow;
+        }
+
+        public override void SendCommand()
+        {
+            if (masterpos.Lat == 0 || masterpos.Lng == 0) return;
+
+            var (lx, ly, zone, north) = GeoHelper.LatLonToUtm(masterpos.Lat, masterpos.Lng);
+            float heading = (float)(-Leader.cs.yaw * MathHelper.Deg2Rad);
+
+            foreach (var port in MainV2.Comports)
+                foreach (var mav in port.MAVlist)
+                {
+                    if (mav == Leader) continue;
+
+                    var comp = loadCtrl.Compensate(Leader, mav, offsets, out var N);
+
+                    var off = offsets[mav].V;
+                    double x2 = lx + off.X * Math.Cos(heading) - off.Y * Math.Sin(heading);
+                    double y2 = ly + off.X * Math.Sin(heading) + off.Y * Math.Cos(heading);
+                    var (tlat, tlon) = GeoHelper.UtmToLatLon(x2, y2, zone, north);
+                    double talt = masterpos.Alt + off.Z;
+
+                    if (!pids.ContainsKey(mav))
+                        pids[mav] = (new PIDController(Kp0, Ki0, Kd0), new PIDController(Kv0, Ki0, Kd0));
+                    var (pidP, pidV) = pids[mav];
+
+                    var curPos = new Vector3Wrapper((float)mav.cs.lat, (float)mav.cs.lng, (float)mav.cs.alt);
+                    var tarPos = new Vector3Wrapper((float)tlat, (float)tlon, (float)talt);
+                    var posErr = Vector3Wrapper.Add(tarPos, Vector3Wrapper.Multiply(curPos, -1f));
+
+                    var curVel = new Vector3Wrapper((float)mav.cs.vx, (float)mav.cs.vy, (float)mav.cs.vz);
+                    var velErr = Vector3Wrapper.Add(Vector3Wrapper.Zero, curVel);
+
+                    float dt = (float)(DateTime.UtcNow - lastTime).TotalSeconds;
+
+                    pidP.Kp += sigma * (pidP.Kp - Kp0) + Gi * VectorUtils.LengthSquared(posErr.V);
+                    pidP.Ki += sigma * (pidP.Ki - Ki0) + Gi * VectorUtils.LengthSquared(posErr.V);
+                    pidP.Kd += sigma * (pidP.Kd - Kd0) + Gd * VectorUtils.LengthSquared(velErr.V);
+                    pidV.Kp += sigma * (pidV.Kp - Kv0) + Gi * VectorUtils.LengthSquared(velErr.V);
+                    pidV.Ki += sigma * (pidV.Ki - Ki0) + Gi * VectorUtils.LengthSquared(velErr.V);
+                    pidV.Kd += sigma * (pidV.Kd - Kd0) + Gd * VectorUtils.LengthSquared(velErr.V);
+
+                    pidP.ClampLower(Kp0, Ki0, Kd0);
+                    pidV.ClampLower(Kv0, Ki0, Kd0);
+
+                    float dPos = (posErr.V.X - pidP.lastError) / dt;
+                    float outP = pidP.Step(posErr.V.X, dPos, dt);
+                    pidP.lastError = posErr.V.X;
+
+                    float dVel = (velErr.V.X - pidV.lastError) / dt;
+                    float outV = pidV.Step(velErr.V.X, dVel, dt);
+                    pidV.lastError = velErr.V.X;
+
+                    float cmd = outP + outV + comp.V.X;
+
+                    // position+velocity target (15-arg overload)
+                    var leaderVel = new Vector3Wrapper((float)Leader.cs.vx, (float)Leader.cs.vy, (float)Leader.cs.vz);
+                    port.setPositionTargetGlobalInt(
+                        mav.sysid,
+                        mav.compid,
+                        true,   // use position
+                        true,   // use velocity
+                        false,  // use acceleration
+                        false,  // is force
+                        MAVLink.MAV_FRAME.GLOBAL_RELATIVE_ALT_INT,
+                        (float)tlat,  // latitude (deg)
+                        (float)tlon,  // longitude (deg)
+                        (float)talt,  // altitude (m)
+                        leaderVel.V.X, // vx (m/s)
+                        leaderVel.V.Y, // vy (m/s)
+                        leaderVel.V.Z, // vz (m/s)
+                        0f,           // afx (ignored)
+                        0f            // afy (ignored)
+                    );
+                }
         }
     }
 }
