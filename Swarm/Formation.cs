@@ -99,9 +99,15 @@ namespace MissionPlanner.Swarm
         }
     }
 
-    // --- Utility Math ---
+     // --- Utility Math ---
     internal static class MathHelper
     {
+        // Primary rad/deg constants
+        public const double Deg2Rad = Math.PI / 180.0;
+        public const double Rad2Deg = 180.0 / Math.PI;
+        // Aliases for older code compatibility
+        public const double deg2rad = Deg2Rad;
+        public const double rad2deg = Rad2Deg;
         public const double Deg2Rad = Math.PI / 180.0;
         public const double Rad2Deg = 180.0 / Math.PI;
     }
