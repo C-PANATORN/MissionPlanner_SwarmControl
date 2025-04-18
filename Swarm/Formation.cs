@@ -202,6 +202,10 @@ namespace MissionPlanner.Swarm
         public Vec3 GetOffset(MAVState m)
             => offsets.TryGetValue(m, out var off) ? off : Vec3.Zero;
 
+        // Backward-compatible aliases
+        public void setOffsets(MAVState m, Vec3 offset) => SetOffset(m, offset);
+        public Vec3 getOffsets(MAVState m) => GetOffset(m);
+
         public override void Update()
         {
             var mav = MainV2.comPort.MAV;
