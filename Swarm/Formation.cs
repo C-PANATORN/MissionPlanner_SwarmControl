@@ -161,7 +161,7 @@ namespace MissionPlanner.Swarm
                       )
                     : orig;
                 var qi3 = VectorUtils.Normalize(new Vector3Wrapper(rvec.X, rvec.Y, rvec.Z)).V;
-                Phi[0, i] = qi3.X; Phi[1, i] = qi3.Y; Phi[2, i] = qi3.Z;
+                Phi[0, i] = qi3.X;  Phi[1, i] = qi3.Y;  Phi[2, i] = qi3.Z;
                 Phi[3, i] = rvec.Y * qi3.Z - rvec.Z * qi3.Y;
                 Phi[4, i] = rvec.Z * qi3.X - rvec.X * qi3.Z;
                 Phi[5, i] = rvec.X * qi3.Y - rvec.Y * qi3.X;
@@ -223,22 +223,19 @@ namespace MissionPlanner.Swarm
         private PointLatLngAlt masterpos = new PointLatLngAlt();
         private DateTime lastTime = DateTime.UtcNow;
 
-        // Adaptive control constants
-        private const float sigma = 0.1f;                           // σ‑modification rate 
-        private const float Kp0 = 1f, Ki0 = 0.1f, Kd0 = 0.01f;      // position gain
-        private const float Kv0 = 1f;                               // velocity gain
-        private const float Gi = 0.1f, Gd = 0.01f;                  // adaptation rate 
+        // --- Adaptive control constants ---
+        private const float sigma = 0.1f;                          // sigma-modification
+        private const float Kp0 = 1f, Ki0 = 0.1f, Kd0 = 0.01f;     // position gain
+        private const float Kv0 = 1f;                              // velocity gain
+        private const float Gi = 0.1f, Gd = 0.01f;                 // adaptation rate
 
-        public void SetOffsets(MAVState m, float x, float y, float z)
+                public void SetOffsets(MAVState m, float x, float y, float z)
             => offsets[m] = new Vector3Wrapper(x, y, z);
 
-        public override void Update()
-        {
-            if (MainV2.comPort.MAV.cs.lat == 0 || MainV2.comPort.MAV.cs.lng == 0) return;
-            if (Leader == null) Leader = MainV2.comPort.MAV;
-            masterpos = new PointLatLngAlt(Leader.cs.lat, Leader.cs.lng, Leader.cs.alt, "");
-            lastTime = DateTime.UtcNow;
-        }
+        // Getter for offsets
+        public Vector3Wrapper GetOffsets(MAVState m)
+            => offsets.TryGetValue(m, out var w) ? w : Vector3Wrapper.Zero;
+
 
         public override void SendCommand()
         {
@@ -248,71 +245,71 @@ namespace MissionPlanner.Swarm
             float heading = (float)(-Leader.cs.yaw * MathHelper.Deg2Rad);
 
             foreach (var port in MainV2.Comports)
-                foreach (var mav in port.MAVlist)
-                {
-                    if (mav == Leader) continue;
+            foreach (var mav in port.MAVlist)
+            {
+                if (mav == Leader) continue;
 
-                    var comp = loadCtrl.Compensate(Leader, mav, offsets, out var N);
+                var comp = loadCtrl.Compensate(Leader, mav, offsets, out var N);
 
-                    var off = offsets[mav].V;
-                    double x2 = lx + off.X * Math.Cos(heading) - off.Y * Math.Sin(heading);
-                    double y2 = ly + off.X * Math.Sin(heading) + off.Y * Math.Cos(heading);
-                    var (tlat, tlon) = GeoHelper.UtmToLatLon(x2, y2, zone, north);
-                    double talt = masterpos.Alt + off.Z;
+                var off = offsets[mav].V;
+                double x2 = lx + off.X * Math.Cos(heading) - off.Y * Math.Sin(heading);
+                double y2 = ly + off.X * Math.Sin(heading) + off.Y * Math.Cos(heading);
+                var (tlat, tlon) = GeoHelper.UtmToLatLon(x2, y2, zone, north);
+                double talt = masterpos.Alt + off.Z;
 
-                    if (!pids.ContainsKey(mav))
-                        pids[mav] = (new PIDController(Kp0, Ki0, Kd0), new PIDController(Kv0, Ki0, Kd0));
-                    var (pidP, pidV) = pids[mav];
+                if (!pids.ContainsKey(mav))
+                    pids[mav] = (new PIDController(Kp0, Ki0, Kd0), new PIDController(Kv0, Ki0, Kd0));
+                var (pidP, pidV) = pids[mav];
 
-                    var curPos = new Vector3Wrapper((float)mav.cs.lat, (float)mav.cs.lng, (float)mav.cs.alt);
-                    var tarPos = new Vector3Wrapper((float)tlat, (float)tlon, (float)talt);
-                    var posErr = Vector3Wrapper.Add(tarPos, Vector3Wrapper.Multiply(curPos, -1f));
+                var curPos = new Vector3Wrapper((float)mav.cs.lat, (float)mav.cs.lng, (float)mav.cs.alt);
+                var tarPos = new Vector3Wrapper((float)tlat, (float)tlon, (float)talt);
+                var posErr = Vector3Wrapper.Add(tarPos, Vector3Wrapper.Multiply(curPos, -1f));
 
-                    var curVel = new Vector3Wrapper((float)mav.cs.vx, (float)mav.cs.vy, (float)mav.cs.vz);
-                    var velErr = Vector3Wrapper.Add(Vector3Wrapper.Zero, curVel);
+                var curVel = new Vector3Wrapper((float)mav.cs.vx, (float)mav.cs.vy, (float)mav.cs.vz);
+                var velErr = Vector3Wrapper.Add(Vector3Wrapper.Zero, curVel);
 
-                    float dt = (float)(DateTime.UtcNow - lastTime).TotalSeconds;
+                float dt = (float)(DateTime.UtcNow - lastTime).TotalSeconds;
 
-                    pidP.Kp += sigma * (pidP.Kp - Kp0) + Gi * VectorUtils.LengthSquared(posErr.V);
-                    pidP.Ki += sigma * (pidP.Ki - Ki0) + Gi * VectorUtils.LengthSquared(posErr.V);
-                    pidP.Kd += sigma * (pidP.Kd - Kd0) + Gd * VectorUtils.LengthSquared(velErr.V);
-                    pidV.Kp += sigma * (pidV.Kp - Kv0) + Gi * VectorUtils.LengthSquared(velErr.V);
-                    pidV.Ki += sigma * (pidV.Ki - Ki0) + Gi * VectorUtils.LengthSquared(velErr.V);
-                    pidV.Kd += sigma * (pidV.Kd - Kd0) + Gd * VectorUtils.LengthSquared(velErr.V);
+                pidP.Kp += sigma * (pidP.Kp - Kp0) + Gi * VectorUtils.LengthSquared(posErr.V);
+                pidP.Ki += sigma * (pidP.Ki - Ki0) + Gi * VectorUtils.LengthSquared(posErr.V);
+                pidP.Kd += sigma * (pidP.Kd - Kd0) + Gd * VectorUtils.LengthSquared(velErr.V);
+                pidV.Kp += sigma * (pidV.Kp - Kv0) + Gi * VectorUtils.LengthSquared(velErr.V);
+                pidV.Ki += sigma * (pidV.Ki - Ki0) + Gi * VectorUtils.LengthSquared(velErr.V);
+                pidV.Kd += sigma * (pidV.Kd - Kd0) + Gd * VectorUtils.LengthSquared(velErr.V);
 
-                    pidP.ClampLower(Kp0, Ki0, Kd0);
-                    pidV.ClampLower(Kv0, Ki0, Kd0);
+                pidP.ClampLower(Kp0, Ki0, Kd0);
+                pidV.ClampLower(Kv0, Ki0, Kd0);
 
-                    float dPos = (posErr.V.X - pidP.lastError) / dt;
-                    float outP = pidP.Step(posErr.V.X, dPos, dt);
-                    pidP.lastError = posErr.V.X;
+                float dPos = (posErr.V.X - pidP.lastError) / dt;
+                float outP = pidP.Step(posErr.V.X, dPos, dt);
+                pidP.lastError = posErr.V.X;
 
-                    float dVel = (velErr.V.X - pidV.lastError) / dt;
-                    float outV = pidV.Step(velErr.V.X, dVel, dt);
-                    pidV.lastError = velErr.V.X;
+                float dVel = (velErr.V.X - pidV.lastError) / dt;
+                float outV = pidV.Step(velErr.V.X, dVel, dt);
+                pidV.lastError = velErr.V.X;
 
-                    float cmd = outP + outV + comp.V.X;
+                float cmd = outP + outV + comp.V.X;
 
-                    // position+velocity target (15-arg overload)
-                    var leaderVel = new Vector3Wrapper((float)Leader.cs.vx, (float)Leader.cs.vy, (float)Leader.cs.vz);
-                    port.setPositionTargetGlobalInt(
-                        mav.sysid,
-                        mav.compid,
-                        true,   // use position
-                        true,   // use velocity
-                        false,  // use acceleration
-                        false,  // is force
-                        MAVLink.MAV_FRAME.GLOBAL_RELATIVE_ALT_INT,
-                        (float)tlat,  // latitude (deg)
-                        (float)tlon,  // longitude (deg)
-                        (float)talt,  // altitude (m)
-                        leaderVel.V.X, // vx (m/s)
-                        leaderVel.V.Y, // vy (m/s)
-                        leaderVel.V.Z, // vz (m/s)
-                        0f,           // afx (ignored)
-                        0f            // afy (ignored)
-                    );
-                }
+                // position+velocity target (15-arg overload)
+                var leaderVel = new Vector3Wrapper((float)Leader.cs.vx, (float)Leader.cs.vy, (float)Leader.cs.vz);
+                port.setPositionTargetGlobalInt(
+                    mav.sysid,
+                    mav.compid,
+                    true,   // use position
+                    true,   // use velocity
+                    false,  // use acceleration
+                    false,  // is force
+                    MAVLink.MAV_FRAME.GLOBAL_RELATIVE_ALT_INT,
+                    (float)tlat,  // latitude (deg)
+                    (float)tlon,  // longitude (deg)
+                    (float)talt,  // altitude (m)
+                    leaderVel.V.X, // vx (m/s)
+                    leaderVel.V.Y, // vy (m/s)
+                    leaderVel.V.Z, // vz (m/s)
+                    0f,           // afx (ignored)
+                    0f            // afy (ignored)
+                );
+            }
         }
     }
 }
