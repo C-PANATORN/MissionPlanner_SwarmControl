@@ -25,7 +25,7 @@ namespace MissionPlanner.Swarm
         private float payloadGain = 1.0f;
         private float Kp = 2.0f, Kv = 1.0f;
         private const float gammaPayload = 0.1f, gammaKp = 0.05f, gammaKv = 0.05f;
-        private const float compTau = 0.1f;
+        private const float compTau = 0.05f;
 
         private readonly CoordinateTransformationFactory ctfac = new CoordinateTransformationFactory();
         private readonly IGeographicCoordinateSystem wgs84 = GeographicCoordinateSystem.WGS84;
@@ -105,7 +105,7 @@ namespace MissionPlanner.Swarm
                         Vector3 u = a_ff + a_fb + smooth * payloadGain;
 
                         // 5) Consensus term
-                        float Kc = 0.5f;
+                        float Kc = 1.0f;
                         Vector3 consensus = Vector3.Zero;
                         foreach (var nei in GetNeighbors(mav))
                         {
