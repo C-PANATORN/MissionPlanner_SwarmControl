@@ -23,7 +23,7 @@ namespace MissionPlanner.Swarm
             { 0.0,   0.0,   0.0397 }
         });
         public const float YawRateDt = 0.01f;
-        public const double AdaptationGain = 0.5;
+        public const double AdaptationGain = 0.1; // tuned down for stability
         public const double MinCompGain = 0.1;
         public const double MaxCompGain = 2.0;
     }
@@ -152,12 +152,34 @@ namespace MissionPlanner.Swarm
         private readonly LoadAttitudeController ctrl = new LoadAttitudeController();
         private PointLatLngAlt payloadPose = new PointLatLngAlt();
 
-        public void SetDesiredAcceleration(MAVState mav, Vector3 accel) => desiredAccel[mav] = accel;
-        public void SetOffsets(MAVState mav, double x, double y, double z) => offsets[mav] = new Vector3((float)x, (float)y, (float)z);
-        // Legacy alias for compatibility
-        public void setOffsets(MAVState mav, double x, double y, double z) => SetOffsets(mav, x, y, z);
-        /// <summary>Get the offset for a follower MAV.</summary>
-        public Vector3 getOffsets(MAVState mav) => offsets.ContainsKey(mav) ? offsets[mav] : Vector3.Zero;
+        public void SetDesiredAcceleration(MAVState mav, Vector3 accel)
+        {
+            desiredAccel[mav] = accel;
+        }
+
+        /// <summary>
+        /// Set desired formation offset for a follower MAV.
+        /// </summary>
+        public void SetFormationOffset(MAVState mav, double x, double y, double z)
+        {
+            offsets[mav] = new Vector3((float)x, (float)y, (float)z);
+        }
+
+        /// <summary>
+        /// Alias for SetFormationOffset (case-insensitive compatibility).
+        /// </summary>
+        public void setOffsets(MAVState mav, double x, double y, double z)
+        {
+            SetFormationOffset(mav, x, y, z);
+        }
+
+        /// <summary>
+        /// Retrieve the offset for a follower MAV.
+        /// </summary>
+        public Vector3 getOffsets(MAVState mav)
+        {
+            return offsets.TryGetValue(mav, out var off) ? off : Vector3.Zero;
+        }
 
         public override void Update()
         {
@@ -205,8 +227,10 @@ namespace MissionPlanner.Swarm
             double yawRad=MathUtils.WrapDegrees(yawErr)*MathUtils.Deg2Rad;
             if(mav.cs.firmware==Firmwares.ArduPlane)
             {
-                float roll=(float)Math.Atan2(accel.x,accel.z+(float)FormationConstants.Gravity);
-                float pitch=(float)Math.Atan2(-accel.y,accel.z+(float)FormationConstants.Gravity);
+                // Low-level inversion using gravity as reference
+                float roll = (float)Math.Atan2(accel.x, (float)FormationConstants.Gravity);
+
+                float pitch = (float)Math.Atan2(-accel.y, (float)FormationConstants.Gravity);
                 var q=Quaternion.from_euler312(roll,pitch,(float)yawRad);
                 port.sendPacket(new MAVLink.mavlink_set_attitude_target_t
                 {
