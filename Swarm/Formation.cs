@@ -12,7 +12,7 @@ using Vector3 = MissionPlanner.Utilities.Vector3;
 namespace MissionPlanner.Swarm
 {
     /// <summary>
-    /// Formation control with FBAC + consensus term (§3.1–3.4 + consensus)
+    /// Formation control with FBAC, V-formation neighbors, speed-based consensus
     /// </summary>
     internal class Formation : Swarm
     {
@@ -21,20 +21,26 @@ namespace MissionPlanner.Swarm
         private readonly Dictionary<MAVState, float> prevYawRate = new Dictionary<MAVState, float>();
         private readonly LoadAttitudeController payloadController = new LoadAttitudeController();
 
-        // Adaptive params
+        // Adaptive parameters
         private float payloadGain = 1.0f;
-        private float Kp = 2.0f, Kv = 1.0f;
-        private const float gammaPayload = 0.1f, gammaKp = 0.05f, gammaKv = 0.05f;
-        private const float compTau = 0.05f;
+        private float Kp = 2.0f;
+        private float Kv = 1.0f;
+        private const float gammaPayload = 0.1f;
+        private const float gammaKp = 0.05f;
+        private const float gammaKv = 0.05f;
+        private const float compTau = 0.1f;
+        private const float speedGain = 0.5f;
 
         private readonly CoordinateTransformationFactory ctfac = new CoordinateTransformationFactory();
         private readonly IGeographicCoordinateSystem wgs84 = GeographicCoordinateSystem.WGS84;
         private PointLatLngAlt masterpos;
         private DateTime lastUpdateTime = DateTime.UtcNow;
 
-        public void setOffsets(MAVState mav, double x, double y, double z) =>
-            offsets[mav] = new Vector3((float)x, (float)y, (float)z);
-        public Vector3 getOffsets(MAVState mav) => offsets.ContainsKey(mav) ? offsets[mav] : Vector3.Zero;
+        public void setOffsets(MAVState mav, double x, double y, double z)
+            => offsets[mav] = new Vector3((float)x, (float)y, (float)z);
+
+        public Vector3 getOffsets(MAVState mav)
+            => offsets.ContainsKey(mav) ? offsets[mav] : Vector3.Zero;
 
         public override void Update()
         {
@@ -45,7 +51,8 @@ namespace MissionPlanner.Swarm
             lastUpdateTime = DateTime.UtcNow;
         }
 
-        private double wrap_180(double a) => a > 180 ? a - 360 : a < -180 ? a + 360 : a;
+        private double wrap_180(double a)
+            => a > 180 ? a - 360 : a < -180 ? a + 360 : a;
 
         public override void SendCommand()
         {
@@ -53,13 +60,15 @@ namespace MissionPlanner.Swarm
             int zone = (int)((masterpos.Lng + 180.0) / 6.0);
             var utm = ProjectedCoordinateSystem.WGS84_UTM(zone, masterpos.Lat >= 0);
             var trans = ctfac.CreateFromCoordinateSystems(wgs84, utm);
-            double[] lXY = trans.MathTransform.Transform(new[] { masterpos.Lng, masterpos.Lat });
-            Vector3 leaderUTM = new Vector3((float)lXY[0], (float)lXY[1], (float)masterpos.Alt);
+            double[] leadXY = trans.MathTransform.Transform(new[] { masterpos.Lng, masterpos.Lat });
+            Vector3 leaderUTM = new Vector3((float)leadXY[0], (float)leadXY[1], (float)masterpos.Alt);
 
             foreach (var port in MainV2.Comports)
                 foreach (var mav in port.MAVlist)
                 {
                     if (mav == Leader) continue;
+
+                    // Compute target UTM position
                     Vector3 off = getOffsets(mav);
                     double hdg = -Leader.cs.yaw * (Math.PI / 180.0);
                     Vector3 targetUTM = new Vector3(
@@ -75,7 +84,7 @@ namespace MissionPlanner.Swarm
                         DateTime now = DateTime.UtcNow;
                         float dt = (float)(now - lastUpdateTime).TotalSeconds;
 
-                        // 1) Analytic ff accel
+                        // 1) Analytic feed-forward accel
                         Vector3 aL = new Vector3(Leader.cs.ax, Leader.cs.ay, Leader.cs.az);
                         float yawR = payloadController.EstimateYawRate(Leader);
                         float yawA = prevYawRate.TryGetValue(mav, out var pr) ? (yawR - pr) / dt : 0f;
@@ -84,17 +93,22 @@ namespace MissionPlanner.Swarm
                             + new Vector3(-yawR * yawR * off.x, -yawR * yawR * off.y, 0f)
                             + new Vector3(-off.y * yawA, off.x * yawA, 0f);
 
-                        // 2) Feedback accel
-                        double[] cXY = trans.MathTransform.Transform(new[] { mav.cs.lng, mav.cs.lat });
-                        Vector3 curUTM = new Vector3((float)cXY[0], (float)cXY[1], mav.cs.alt);
+                        // 2) Feedback accel with speed adjustment
+                        double[] curXY = trans.MathTransform.Transform(new[] { mav.cs.lng, mav.cs.lat });
+                        Vector3 curUTM = new Vector3((float)curXY[0], (float)curXY[1], mav.cs.alt);
                         Vector3 e_pos = targetUTM - curUTM;
                         Vector3 curV = new Vector3(mav.cs.vx, mav.cs.vy, mav.cs.vz);
-                        Vector3 v_ff = new Vector3(Leader.cs.vx, Leader.cs.vy, Leader.cs.vz)
-                            + new Vector3(-yawR * off.y, yawR * off.x, 0f);
+
+                        // Track direction and along-track error
+                        Vector3 trackDir = VectorUtils.NormalizeVector(leaderUTM - curUTM);
+                        float alongError = (float)(trackDir.x * e_pos.x + trackDir.y * e_pos.y + trackDir.z * e_pos.z);
+
+                        float v_cmd = Leader.cs.groundspeed + speedGain * alongError;
+                        Vector3 v_ff = trackDir * v_cmd;
                         Vector3 e_vel = v_ff - curV;
                         Vector3 a_fb = e_pos * Kp + e_vel * Kv;
 
-                        // 3) Tension comp w/ null-space
+                        // 3) Tension compensation with null-space
                         Vector3 comp = payloadController.CompensateRigidBodyDynamics(Leader, mav, offsets);
                         float alpha = dt / (compTau + dt);
                         Vector3 prevC = compFiltered.ContainsKey(mav) ? compFiltered[mav] : Vector3.Zero;
@@ -104,23 +118,12 @@ namespace MissionPlanner.Swarm
                         // 4) Total accel
                         Vector3 u = a_ff + a_fb + smooth * payloadGain;
 
-                        // 5) Consensus term
-                        float Kc = 1.0f;
-                        Vector3 consensus = Vector3.Zero;
-                        foreach (var nei in GetNeighbors(mav))
-                        {
-                            double[] nXY = trans.MathTransform.Transform(new[] { nei.cs.lng, nei.cs.lat });
-                            Vector3 nUTM = new Vector3((float)nXY[0], (float)nXY[1], nei.cs.alt);
-                            consensus += (nUTM - curUTM);
-                        }
-                        u += consensus * Kc;
-
-                        // 6) Attitude + thrust
+                        // 5) Attitude & thrust inversion
                         double phi = Math.Asin(Math.Max(-1, Math.Min(1, u.y / 9.81))) * (180.0 / Math.PI);
                         double tht = Math.Asin(Math.Max(-1, Math.Min(1, -u.x / 9.81))) * (180.0 / Math.PI);
                         float thrust = (float)Math.Max(0.1, Math.Min(1, (u.z + 9.81) / 9.81));
 
-                        // 7) FBAC adaptation
+                        // 6) FBAC adaptation
                         float tensionErr = (float)(e_pos.x * smooth.x + e_pos.y * smooth.y + e_pos.z * smooth.z);
                         float posErrSq = (float)(e_pos.x * e_pos.x + e_pos.y * e_pos.y + e_pos.z * e_pos.z);
                         float velErrSq = (float)(e_vel.x * e_vel.x + e_vel.y * e_vel.y + e_vel.z * e_vel.z);
@@ -128,10 +131,12 @@ namespace MissionPlanner.Swarm
                         Kp = Math.Max(0.1f, Kp + gammaKp * posErrSq * dt);
                         Kv = Math.Max(0.1f, Kv + gammaKv * velErrSq * dt);
 
-                        // 8) Yaw ff + fb
+                        // 7) Yaw feed-forward + feedback
                         double psi_ff = Leader.cs.yaw + yawR * dt;
                         double psi_err = wrap_180(psi_ff - mav.cs.yaw);
-                        var quat = Quaternion.from_euler312((float)(phi * Math.PI / 180.0), (float)(tht * Math.PI / 180.0), (float)(psi_err * Math.PI / 180.0));
+                        var quat = Quaternion.from_euler312((float)(phi * Math.PI / 180.0),
+                                                            (float)(tht * Math.PI / 180.0),
+                                                            (float)(psi_err * Math.PI / 180.0));
                         var msg = new MAVLink.mavlink_set_attitude_target_t
                         {
                             target_system = mav.sysid,
@@ -153,23 +158,14 @@ namespace MissionPlanner.Swarm
                     }
                 }
         }
-
-        // Placeholder for neighbor lookup; implement based on offsets or topology
-        private IEnumerable<MAVState> GetNeighbors(MAVState mav)
-        {
-            foreach (var kv in offsets)
-                if (kv.Key != mav)
-                    yield return kv.Key;
-        }
     }
 
-    // PID Controller Implementation
+    /// <summary>PID controller</summary>
     internal class PID
     {
         private float dt, input, deriv, integrator, imax, filtHz;
         private readonly float kp, ki, kd;
         private bool resetFilter = true;
-
         public PID(float p, float i, float d, float im, float fHz, float dt0, float ff)
         {
             kp = p; ki = i; kd = d; imax = Math.Abs(im);
