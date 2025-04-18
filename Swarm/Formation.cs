@@ -13,7 +13,7 @@ namespace MissionPlanner.Swarm
 {
     /// <summary>
     /// Formation control with Flatness-Based Adaptive Control (FBAC):
-    /// analytic feed-forward, unified adaptive feedback, wrench-based tension distribution, yaw feed-forward.
+    /// analytic feed-forward, unified adaptive feedback, wrench-based tension distribution with null-space balancing, yaw feed-forward.
     /// </summary>
     internal class Formation : Swarm
     {
@@ -27,12 +27,13 @@ namespace MissionPlanner.Swarm
         private readonly LoadAttitudeController payloadController = new LoadAttitudeController();
 
         // Adaptive parameters (initial values)
-        private float payloadGain = 1.0f;
-        private float Kp = 2.0f;
-        private float Kv = 1.0f;
+        private float payloadGain = 0.5f;
+        private float Kp = 1.0f;
+        private float Kv = 0.5f;
         // Adaptation rates
         private const float gammaPayload = 0.1f;
         private const float gammaKp = 0.05f;
+        private const float gammaKv = 0.05f;
 
         // Tension smoothing constant
         private const float compTau = 0.1f;
@@ -89,7 +90,7 @@ namespace MissionPlanner.Swarm
                         DateTime now = DateTime.UtcNow;
                         float dt = (float)(now - lastUpdateTime).TotalSeconds;
 
-                        // 1) Analytic feed-forward accel (flatness) §3.2
+                        // 1) Analytic feed-forward accel (§3.2)
                         Vector3 aL = new Vector3(Leader.cs.ax, Leader.cs.ay, Leader.cs.az);
                         float yawR = payloadController.EstimateYawRate(Leader);
                         float yawA = prevYawRate.TryGetValue(mav, out var pr) ? (yawR - pr) / dt : 0f;
@@ -98,7 +99,7 @@ namespace MissionPlanner.Swarm
                         Vector3 a_tan = new Vector3(-off.y * yawA, off.x * yawA, 0f);
                         Vector3 a_ff = aL + a_cent + a_tan;
 
-                        // 2) Unified feedback accel §3.3
+                        // 2) Feedback accel (§3.3)
                         double[] cXY = trans.MathTransform.Transform(new[] { mav.cs.lng, mav.cs.lat });
                         Vector3 curUTM = new Vector3((float)cXY[0], (float)cXY[1], mav.cs.alt);
                         Vector3 e_pos = targetUTM - curUTM;
@@ -108,33 +109,37 @@ namespace MissionPlanner.Swarm
                         Vector3 e_vel = v_ff - curV;
                         Vector3 a_fb = e_pos * Kp + e_vel * Kv;
 
-                        // 3) Tension compensation §3.1–3.4
-                        Vector3 comp = payloadController.CompensateRigidBodyDynamics(Leader, mav, offsets);
+                        // 3) Tension comp w/ null-space (§3.1)
+                        Vector3 partComp = payloadController.CompensateRigidBodyDynamics(Leader, mav, offsets);
+                        // Solve null-space term inside LoadAttitudeController now
+                        Vector3 totalComp = partComp; // partComp includes null-space balancing
                         float alpha = dt / (compTau + dt);
                         Vector3 prevC = compFiltered.ContainsKey(mav) ? compFiltered[mav] : Vector3.Zero;
-                        Vector3 smooth = prevC + (comp - prevC) * alpha;
+                        Vector3 smooth = prevC + (totalComp - prevC) * alpha;
                         compFiltered[mav] = smooth;
 
                         // 4) Total accel
                         Vector3 u = a_ff + a_fb + smooth * payloadGain;
 
-                        // 5) Attitude + thrust inversion §3.4
+                        // 5) Attitude + thrust inversion (§3.4)
                         double phi = Math.Asin(Math.Max(-1, Math.Min(1, u.y / 9.81))) * (180.0 / Math.PI);
                         double tht = Math.Asin(Math.Max(-1, Math.Min(1, -u.x / 9.81))) * (180.0 / Math.PI);
                         float thrust = (float)Math.Max(0.1, Math.Min(1, (u.z + 9.81) / 9.81));
 
-                        // 6) Adaptive update FBAC §3.3
+                        // 6) Adaptive update FBAC (§3.3)
                         float tensionError = (float)(e_pos.x * smooth.x + e_pos.y * smooth.y + e_pos.z * smooth.z);
                         float posErrorSq = (float)(e_pos.x * e_pos.x + e_pos.y * e_pos.y + e_pos.z * e_pos.z);
-
-                        payloadGain += (float)(gammaPayload * tensionError * dt);
+                        float velErrorSq = (float)(e_vel.x * e_vel.x + e_vel.y * e_vel.y + e_vel.z * e_vel.z);
+                        payloadGain += gammaPayload * tensionError * dt;
                         payloadGain = Math.Max(0f, payloadGain);
-
-                        Kp += (float)(gammaKp * posErrorSq * dt);
+                        Kp += gammaKp * posErrorSq * dt;
                         Kp = Math.Max(0.1f, Kp);
+                        Kv += gammaKv * velErrorSq * dt;
+                        Kv = Math.Max(0.1f, Kv);
 
                         // 7) Yaw feed-forward + feedback
-                        double psi_err = wrap_180(Leader.cs.yaw - mav.cs.yaw);
+                        double psi_ff = Leader.cs.yaw + yawR * dt;
+                        double psi_err = wrap_180(psi_ff - mav.cs.yaw);
                         var quat = Quaternion.from_euler312((float)(phi * Math.PI / 180.0), (float)(tht * Math.PI / 180.0), (float)(psi_err * Math.PI / 180.0));
                         var msg = new MAVLink.mavlink_set_attitude_target_t
                         {
@@ -200,86 +205,75 @@ namespace MissionPlanner.Swarm
         }
     }
 
-    /// <summary>Payload wrench solver</summary>
+    /// <summary>Payload wrench solver with null-space tension balancing</summary>
     internal class LoadAttitudeController
     {
         public double PayloadMass { get; set; } = 1.0;
-        private static readonly Matrix<double> JL = Matrix<double>.Build.DenseOfArray(new double[,] { { 0.021, 0, 0 }, { 0, 0.0187, 0 }, { 0, 0, 0.0397 } });
-        private static readonly Dictionary<int, Tuple<float, float>> YawHistory = new Dictionary<int, Tuple<float, float>>();
+        private static readonly Matrix<double> JL = Matrix<double>.Build.DenseOfArray(new double[,] {{0.021,0,0},{0,0.0187,0},{0,0,0.0397}});
+        private static readonly Dictionary<int, Tuple<float,float>> YawHistory = new Dictionary<int, Tuple<float,float>>();
+
         public float EstimateYawRate(MAVState leader)
         {
             int id = leader.sysid;
-            float currentYaw = leader.cs.yaw;
-            float currentTime = (float)(DateTime.UtcNow - new DateTime(1970, 1, 1)).TotalSeconds;
+            float cy = leader.cs.yaw;
+            float ct = (float)(DateTime.UtcNow - new DateTime(1970,1,1)).TotalSeconds;
             if (YawHistory.ContainsKey(id))
             {
                 var (py, pt) = YawHistory[id];
-                float dy = (float)Wrap(currentYaw - py);
-                float dt = currentTime - pt;
-                YawHistory[id] = Tuple.Create(currentYaw, currentTime);
-                return dt > 1e-3f ? dy / dt : 0f;
+                float dy = (float)Wrap(cy - py);
+                float dt = ct - pt;
+                YawHistory[id] = Tuple.Create(cy, ct);
+                return dt>1e-3f?dy/dt:0f;
             }
-            YawHistory[id] = Tuple.Create(currentYaw, currentTime);
+            YawHistory[id] = Tuple.Create(cy, ct);
             return 0f;
         }
+
         public Vector3 CompensateRigidBodyDynamics(MAVState leader, MAVState follower, Dictionary<MAVState, Vector3> offsets)
         {
             if (!offsets.ContainsKey(follower)) return Vector3.Zero;
             var pts = new List<Vector3>(offsets.Values);
             if (pts.Count < 3) return Vector3.Zero;
-            var staticOff = offsets[follower];
+            var rOff = offsets[follower];
             float yawRate = EstimateYawRate(leader);
-            float compTc = Math.Abs(yawRate) > 10 ? 0.05f : 0.2f;
+            float compTc = Math.Abs(yawRate)>10?0.05f:0.2f;
             float dt = 0.05f;
-            float alpha = dt / (compTc + dt);
+            float alpha = dt/(compTc+dt);
             float m = (float)PayloadMass;
-            var accel = Vector<double>.Build.DenseOfArray(new double[] { leader.cs.ax * m, leader.cs.ay * m, (leader.cs.az + 9.81f) * m });
-            var grav = Vector<double>.Build.Dense(new[] { 0.0, 0.0, -9.81 }) * m;
-            var R = BuildRotationMatrix(leader.cs.roll, leader.cs.pitch, leader.cs.yaw);
-            var Wf = -R.Transpose() * (accel + grav);
-            var omega = Vector<double>.Build.Dense(3);
-            var omegaDot = Vector<double>.Build.Dense(3);
-            var Wm = -(JL * omegaDot + Cross(omega, JL * omega));
-            var W = Vector<double>.Build.Dense(6);
-            W.SetSubVector(0, 3, Wf);
-            W.SetSubVector(3, 3, Wm);
-            var Phi = Matrix<double>.Build.Dense(6, pts.Count);
-            for (int i = 0; i < pts.Count; i++)
-            {
-                var r = pts[i];
-                var qi = VectorUtils.NormalizeVector(r);
-                Phi[0, i] = qi.x; Phi[1, i] = qi.y; Phi[2, i] = qi.z;
-                Phi[3, i] = r.y * qi.z - r.z * qi.y;
-                Phi[4, i] = r.z * qi.x - r.x * qi.z;
-                Phi[5, i] = r.x * qi.y - r.y * qi.x;
+            var accel = Vector<double>.Build.DenseOfArray(new double[]{leader.cs.ax*m, leader.cs.ay*m, (leader.cs.az+9.81f)*m});
+            var grav  = Vector<double>.Build.Dense(new[]{0.0,0.0,-9.81})*m;
+            var R    = BuildRotationMatrix(leader.cs.roll,leader.cs.pitch,leader.cs.yaw);
+            var Wf   = -R.Transpose()*(accel+grav);
+            var omega= Vector<double>.Build.Dense(3); var omegaDot= Vector<double>.Build.Dense(3);
+            var Wm   = -(JL*omegaDot + Cross(omega, JL*omega));
+            var W    = Vector<double>.Build.Dense(6); W.SetSubVector(0,3,Wf); W.SetSubVector(3,3,Wm);
+            var Phi  = Matrix<double>.Build.Dense(6,pts.Count);
+            for(int i=0;i<pts.Count;i++){
+                var r=pts[i]; var qi=VectorUtils.NormalizeVector(r);
+                Phi[0,i]=qi.x; Phi[1,i]=qi.y; Phi[2,i]=qi.z;
+                Phi[3,i]=r.y*qi.z-r.z*qi.y;
+                Phi[4,i]=r.z*qi.x-r.x*qi.z;
+                Phi[5,i]=r.x*qi.y-r.y*qi.x;
             }
-            var T = Phi.PseudoInverse() * W;
-            int idx = new List<MAVState>(offsets.Keys).IndexOf(follower);
-            if (idx >= 0 && idx < T.Count)
-            {
-                var qi = VectorUtils.NormalizeVector(staticOff);
-                return qi * (float)Math.Max(0, T[idx]) * alpha;
-            }
+            // compute minimum-norm and null-space
+            var pinv=Phi.PseudoInverse();
+            var Tpart=pinv*W;
+            var N=Matrix<double>.Build.DenseIdentity(pts.Count)-pinv*Phi;
+            double avgT=Tpart.Sum()/pts.Count;
+            var equal=Vector<double>.Build.Dense(pts.Count,avgT);
+            var Tnull=N*equal;
+            var Tfinal=Tpart+Tnull;
+            int idx=new List<MAVState>(offsets.Keys).IndexOf(follower);
+            if(idx>=0 && idx<Tfinal.Count){var qi=VectorUtils.NormalizeVector(rOff);return qi*(float)Math.Max(0,Tfinal[idx])*alpha;}
             return Vector3.Zero;
         }
-        private static double Wrap(double a) => a > 180 ? a - 360 : a < -180 ? a + 360 : a;
-        private static Matrix<double> BuildRotationMatrix(float roll, float pitch, float yaw)
-        {
-            double r = roll * (Math.PI / 180.0), p = pitch * (Math.PI / 180.0), y = yaw * (Math.PI / 180.0);
-            double cr = Math.Cos(r), sr = Math.Sin(r);
-            double cp = Math.Cos(p), sp = Math.Sin(p);
-            double cy = Math.Cos(y), sy = Math.Sin(y);
-            return Matrix<double>.Build.DenseOfArray(new double[,] {
-                { cy*cp, cy*sp*sr - sy*cr, cy*sp*cr + sy*sr },
-                { sy*cp, sy*sp*sr + cy*cr, sy*sp*cr - cy*sr },
-                { -sp,   cp*sr,            cp*cr           }
-            });
+
+        private static double Wrap(double a) => a>180?a-360:a<-180?a+360:a;
+        private static Matrix<double> BuildRotationMatrix(float roll,float pitch,float yaw){
+            double r=roll*(Math.PI/180.0),p=pitch*(Math.PI/180.0),y=yaw*(Math.PI/180.0);
+            double cr=Math.Cos(r),sr=Math.Sin(r),cp=Math.Cos(p),sp=Math.Sin(p),cy=Math.Cos(y),sy=Math.Sin(y);
+            return Matrix<double>.Build.DenseOfArray(new double[,]{{cy*cp,cy*sp*sr-sy*cr,cy*sp*cr+sy*sr},{sy*cp,sy*sp*sr+cy*cr,sy*sp*cr-cy*sr},{-sp,cp*sr,cp*cr}});
         }
-        private static Vector<double> Cross(Vector<double> a, Vector<double> b) =>
-            Vector<double>.Build.DenseOfArray(new double[] {
-                a[1]*b[2] - a[2]*b[1],
-                a[2]*b[0] - a[0]*b[2],
-                a[0]*b[1] - a[1]*b[0]
-            });
+        private static Vector<double> Cross(Vector<double>a,Vector<double>b)=>Vector<double>.Build.DenseOfArray(new double[]{a[1]*b[2]-a[2]*b[1],a[2]*b[0]-a[0]*b[2],a[0]*b[1]-a[1]*b[0]});
     }
 }
