@@ -59,8 +59,8 @@ namespace MissionPlanner.Swarm
     {
         public static Vector3 Normalize(Vector3 v)
         {
-            double len = Math.Sqrt(v.x*v.x + v.y*v.y + v.z*v.z);
-            return len < 1e-6 ? Vector3.Zero : new Vector3((float)(v.x/len), (float)(v.y/len), (float)(v.z/len));
+            double len = Math.Sqrt(v.x * v.x + v.y * v.y + v.z * v.z);
+            return len < 1e-6 ? Vector3.Zero : new Vector3((float)(v.x / len), (float)(v.y / len), (float)(v.z / len));
         }
     }
 
@@ -74,20 +74,20 @@ namespace MissionPlanner.Swarm
         public Matrix<double> ComputeMappingMatrix(Dictionary<MAVState, Vector3> offsets)
         {
             int n = offsets.Count;
-            var Phi = Matrix<double>.Build.Dense(6, 3*n);
+            var Phi = Matrix<double>.Build.Dense(6, 3 * n);
             var pts = new List<Vector3>(offsets.Values);
-            for(int i=0;i<n;i++)
+            for (int i = 0; i < n; i++)
             {
                 Vector3 r = pts[i];
                 var q = VectorUtils.Normalize(r);
-                for(int ax=0;ax<3;ax++) Phi[ax,3*i+ax] = q[ax];
+                for (int ax = 0; ax < 3; ax++) Phi[ax, 3 * i + ax] = q[ax];
                 var hat = Matrix<double>.Build.DenseOfArray(new double[,] {
                     {0,-r.z,r.y},{r.z,0,-r.x},{-r.y,r.x,0}
                 });
-                var mvec = hat * Vector<double>.Build.Dense(new[]{q.x,q.y,q.z});
-                for(int ax=0;ax<3;ax++)
-                    for(int c=0;c<3;c++)
-                        Phi[3+ax,3*i+c] = mvec[ax];
+                var mvec = hat * Vector<double>.Build.Dense(new[] { q.x, q.y, q.z });
+                for (int ax = 0; ax < 3; ax++)
+                    for (int c = 0; c < 3; c++)
+                        Phi[3 + ax, 3 * i + c] = mvec[ax];
             }
             return Phi;
         }
@@ -101,29 +101,29 @@ namespace MissionPlanner.Swarm
                 leader.cs.ay*mL,
                 (leader.cs.az+(float)FormationConstants.Gravity)*mL
             });
-            var R = BuildRotation(leader.cs.roll,leader.cs.pitch,leader.cs.yaw);
-            var Wf = -R.Transpose()*aL;
+            var R = BuildRotation(leader.cs.roll, leader.cs.pitch, leader.cs.yaw);
+            var Wf = -R.Transpose() * aL;
             var Wm = Vector<double>.Build.Dense(3); // assume no moment term
             var W = Vector<double>.Build.Dense(6);
-            W.SetSubVector(0,3,Wf);
-            W.SetSubVector(3,3,Wm);
+            W.SetSubVector(0, 3, Wf);
+            W.SetSubVector(3, 3, Wm);
             return W;
         }
 
         public Vector<double> ComputeTensions(Matrix<double> Phi, Vector<double> W)
-            => Phi.PseudoInverse()*W;
+            => Phi.PseudoInverse() * W;
 
         public void UpdateCompGain(Vector3 rawComp, Vector3 error, float dt)
         {
-            double dot = rawComp.x*error.x + rawComp.y*error.y + rawComp.z*error.z;
-            compGainHat += FormationConstants.AdaptationGain*dot*dt;
-            compGainHat = MathUtils.Constrain(compGainHat,FormationConstants.MinCompGain,FormationConstants.MaxCompGain);
+            double dot = rawComp.x * error.x + rawComp.y * error.y + rawComp.z * error.z;
+            compGainHat += FormationConstants.AdaptationGain * dot * dt;
+            compGainHat = MathUtils.Constrain(compGainHat, FormationConstants.MinCompGain, FormationConstants.MaxCompGain);
         }
 
         private Matrix<double> BuildRotation(float roll, float pitch, float yaw)
         {
-            double r=roll*MathUtils.Deg2Rad, p=pitch*MathUtils.Deg2Rad, y=yaw*MathUtils.Deg2Rad;
-            double cr=Math.Cos(r), sr=Math.Sin(r), cp=Math.Cos(p), sp=Math.Sin(p), cy=Math.Cos(y), sy=Math.Sin(y);
+            double r = roll * MathUtils.Deg2Rad, p = pitch * MathUtils.Deg2Rad, y = yaw * MathUtils.Deg2Rad;
+            double cr = Math.Cos(r), sr = Math.Sin(r), cp = Math.Cos(p), sp = Math.Sin(p), cy = Math.Cos(y), sy = Math.Sin(y);
             return Matrix<double>.Build.DenseOfArray(new double[,] {
                 {cy*cp, cy*sp*sr - sy*cr, cy*sp*cr + sy*sr},
                 {sy*cp, sy*sp*sr + cy*cr, sy*sp*cr - cy*sr},
@@ -204,34 +204,34 @@ namespace MissionPlanner.Swarm
             const float dt = 0.02f;
 
             foreach (var port in MainV2.Comports)
-            foreach (var mav in port.MAVlist)
-            {
-                if (mav == Leader) continue;
+                foreach (var mav in port.MAVlist)
+                {
+                    if (mav == Leader) continue;
 
-                // 1. Feed-forward accel
-                var u_ff = desiredAccel.TryGetValue(mav, out var ff) ? ff : ComputeOffsetTrackingAccel(mav);
+                    // 1. Feed-forward accel
+                    var u_ff = desiredAccel.TryGetValue(mav, out var ff) ? ff : ComputeOffsetTrackingAccel(mav);
 
-                // 2. Payload tension compensation
-                var Phi = ctrl.ComputeMappingMatrix(offsets);
-                var W = ctrl.ComputePayloadWrench(Leader);
-                var T = ctrl.ComputeTensions(Phi, W);
-                int idx = new List<MAVState>(offsets.Keys).IndexOf(mav);
-                float Ti = idx >= 0 ? (float)MathUtils.Constrain((float)T[idx], 0, float.MaxValue) : 0f;
-                var q_i = offsets.TryGetValue(mav, out var o2) ? VectorUtils.Normalize(o2) : Vector3.Zero;
-                var rawComp = q_i * Ti;
+                    // 2. Payload tension compensation
+                    var Phi = ctrl.ComputeMappingMatrix(offsets);
+                    var W = ctrl.ComputePayloadWrench(Leader);
+                    var T = ctrl.ComputeTensions(Phi, W);
+                    int idx = new List<MAVState>(offsets.Keys).IndexOf(mav);
+                    float Ti = idx >= 0 ? (float)MathUtils.Constrain((float)T[idx], 0, float.MaxValue) : 0f;
+                    var q_i = offsets.TryGetValue(mav, out var o2) ? VectorUtils.Normalize(o2) : Vector3.Zero;
+                    var rawComp = q_i * Ti;
 
-                // 3. Adaptive compensation
-                var actual = new Vector3((float)mav.cs.ax, (float)mav.cs.ay, (float)mav.cs.az);
-                var comp = rawComp * (float)ctrl.CompGainHat;
-                var error = actual - (u_ff + comp);
-                ctrl.UpdateCompGain(rawComp, error, dt);
+                    // 3. Adaptive compensation
+                    var actual = new Vector3((float)mav.cs.ax, (float)mav.cs.ay, (float)mav.cs.az);
+                    var comp = rawComp * (float)ctrl.CompGainHat;
+                    var error = actual - (u_ff + comp);
+                    ctrl.UpdateCompGain(rawComp, error, dt);
 
-                // 4. Command accel
-                var cmdAccel = u_ff + comp;
+                    // 4. Command accel
+                    var cmdAccel = u_ff + comp;
 
-                // 5. Send target
-                SendPositionOrAttitude(port, mav, cmdAccel);
-            }
+                    // 5. Send target
+                    SendPositionOrAttitude(port, mav, cmdAccel);
+                }
         }
 
         /// <summary>Map acceleration to attitude or position target.</summary>
@@ -256,10 +256,33 @@ namespace MissionPlanner.Swarm
             }
             else
             {
+                // Compute target global position from leader + offset
+                double lat0 = Leader.cs.lat;
+                double lng0 = Leader.cs.lng;
+                double alt0 = Leader.cs.alt;
+                int zone = (int)((lng0 + 180) / 6);
+                var utm = ProjectedCoordinateSystem.WGS84_UTM(zone, lat0 >= 0);
+                var trans = new CoordinateTransformationFactory()
+                    .CreateFromCoordinateSystems(GeographicCoordinateSystem.WGS84, utm);
+
+                // Leader in UTM
+                double[] leaderXY = trans.MathTransform.Transform(new[] { lng0, lat0 });
+                // Get this MAV's attachment offset
+                var off = offsets.TryGetValue(mav, out var offvec) ? offvec : Vector3.Zero;
+                // Rotate offset into UTM frame
+                double hdg = -Leader.cs.yaw * MathUtils.Deg2Rad;
+                double xDes = leaderXY[0] + off.x * Math.Cos(hdg) - off.y * Math.Sin(hdg);
+                double yDes = leaderXY[1] + off.x * Math.Sin(hdg) + off.y * Math.Cos(hdg);
+                // Convert back to lat/lng
+                double[] inv = trans.MathTransform.Inverse().Transform(new[] { xDes, yDes });
+                double latDes = inv[1];
+                double lngDes = inv[0];
+                float altDes = (float)(alt0 + off.z);
+
                 port.setPositionTargetGlobalInt(
                     mav.sysid, mav.compid, true, true, false, false,
                     MAVLink.MAV_FRAME.GLOBAL_RELATIVE_ALT_INT,
-                    Leader.cs.lat, Leader.cs.lng, Leader.cs.alt,
+                    latDes, lngDes, altDes,
                     accel.x, accel.y, accel.z,
                     0, 0);
             }
