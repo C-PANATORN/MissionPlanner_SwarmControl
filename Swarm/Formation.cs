@@ -35,7 +35,7 @@ namespace MissionPlanner.Swarm
         private const float gammaKp = 0.05f;
         private const float gammaKv = 0.05f;
         // Tension smoothing time constant
-        private const float compTau = 0.05f;
+        private const float compTau = 0.1f;
 
         private readonly CoordinateTransformationFactory ctfac = new CoordinateTransformationFactory();
         private readonly IGeographicCoordinateSystem wgs84 = GeographicCoordinateSystem.WGS84;
@@ -72,23 +72,29 @@ namespace MissionPlanner.Swarm
                 {
                     if (mav == Leader) continue;
 
-                    // Compute desired formation position with look-ahead rotation
+                    // Compute desired formation position with curvature-aware look-ahead
                     Vector3 off = getOffsets(mav);
                     float yawRad = (float)(Leader.cs.yaw * Math.PI / 180.0);
                     float yawRate = payloadController.EstimateYawRate(Leader);
                     float dt = (float)(DateTime.UtcNow - lastUpdateTime).TotalSeconds;
-                    float lookAhead = yawRate * dt;
-                    float cLA = (float)Math.Cos(yawRad + lookAhead);
-                    float sLA = (float)Math.Sin(yawRad + lookAhead);
-                    Vector3 offRot = new Vector3(
-                        off.x * cLA - off.y * sLA,
-                        off.x * sLA + off.y * cLA,
+                    float deltaYaw = yawRate * dt;
+                    float cWarp = (float)Math.Cos(deltaYaw), sWarp = (float)Math.Sin(deltaYaw);
+                    Vector3 offWarp = new Vector3(
+                        off.x * cWarp - off.y * sWarp,
+                        off.x * sWarp + off.y * cWarp,
                         off.z);
+                    float cYaw = (float)Math.Cos(yawRad), sYaw = (float)Math.Sin(yawRad);
+                    Vector3 offRot = new Vector3(
+                        offWarp.x * cYaw - offWarp.y * sYaw,
+                        offWarp.x * sYaw + offWarp.y * cYaw,
+                        offWarp.z);
+
+                    // desired UTM target
                     Vector3 targetUTM = new Vector3(
                         leaderUTM.x + offRot.x,
                         leaderUTM.y + offRot.y,
                         (float)masterpos.Alt + offRot.z);
-                    var inv = trans.MathTransform.Inverse().Transform(new[] { targetUTM.x, targetUTM.y });
+                    double[] inv = trans.MathTransform.Inverse().Transform(new[] { targetUTM.x, targetUTM.y });
                     var targetGeo = new PointLatLngAlt(inv[1], inv[0], targetUTM.z, "");
 
                     if (mav.cs.firmware == Firmwares.ArduPlane)
