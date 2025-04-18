@@ -158,6 +158,14 @@ namespace MissionPlanner.Swarm
         public void SetFormationOffset(MAVState mav, double x, double y, double z)
             => offsets[mav] = new Vector3((float)x, (float)y, (float)z);
 
+        /// <summary>Alias for legacy code: lowercase setOffsets.</summary>
+        public void setOffsets(MAVState mav, double x, double y, double z)
+            => SetFormationOffset(mav, x, y, z);
+
+        /// <summary>Retrieve a follower's offset.</summary>
+        public Vector3 getOffsets(MAVState mav)
+            => offsets.TryGetValue(mav, out var off) ? off : Vector3.Zero;
+
         /// <summary>Compute a simple P‐control to maintain offset above payload.</summary>
         private Vector3 ComputeOffsetTrackingAccel(MAVState mav)
         {
