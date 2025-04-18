@@ -99,7 +99,7 @@ namespace MissionPlanner.Swarm
         }
     }
 
-     // --- Utility Math ---
+    // --- Utility Math ---
     internal static class MathHelper
     {
         // Primary rad/deg constants
@@ -133,9 +133,9 @@ namespace MissionPlanner.Swarm
     // --- Swarm Constants ---
     internal static class SwarmConstants
     {
-        public const float PayloadMass = 1.0f;      //payload mass (kg)
-        public const float DroneMass = 1.5f;        //drone mass (kg)
-        public const float CableLength = 2.0f;      //cable length (m)
+        public const float PayloadMass = 1.0f;
+        public const float DroneMass = 1.5f;
+        public const float CableLength = 2.0f;
     }
 
     // --- Load Attitude Controller ---
@@ -248,11 +248,11 @@ namespace MissionPlanner.Swarm
         private PointLatLngAlt masterpos = new PointLatLngAlt();
         private DateTime lastTime = DateTime.UtcNow;
 
-        // --- Adaptive control constants---
-        private const float sigma = 0.1f;                       // sigma-modificttion
-        private const float Kp0 = 1f, Ki0 = 0.1f, Kd0 = 0.01f;  // position gain
-        private const float Kv0 = 1f;                           // velocity gain
-        private const float Gi = 0.1f, Gd = 0.01f;              // adaptation rate
+        // --- Adaptive control constants ---
+        private const float sigma = 0.1f;
+        private const float Kp0 = 1f, Ki0 = 0.1f, Kd0 = 0.01f;
+        private const float Kv0 = 1f;
+        private const float Gi = 0.1f, Gd = 0.01f;
 
         public void SetOffsets(MAVState m, float x, float y, float z)
             => offsets[m] = new Vector3Wrapper(x, y, z);
