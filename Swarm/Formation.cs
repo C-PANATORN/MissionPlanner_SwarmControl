@@ -36,7 +36,7 @@ namespace MissionPlanner.Swarm
         private const float gammaKv = 0.05f;
 
         // Tension smoothing constant
-        private const float compTau = 0.05f;
+        private const float compTau = 0.025f;
 
         private readonly CoordinateTransformationFactory ctfac = new CoordinateTransformationFactory();
         private readonly IGeographicCoordinateSystem wgs84 = GeographicCoordinateSystem.WGS84;
