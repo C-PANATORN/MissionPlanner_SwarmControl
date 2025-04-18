@@ -140,8 +140,8 @@ namespace MissionPlanner.Swarm
     {
         public static Vector3 Normalize(Vector3 v)
         {
-            double len = Math.Sqrt(v.x * v.x + v.y * v.y + v.z * v.z);
-            return len < 1e-6 ? Vector3.Zero : new Vector3((float)(v.x / len), (float)(v.y / len), (float)(v.z / len));
+            double len = Math.Sqrt(v.x*v.x + v.y*v.y + v.z*v.z);
+            return len < 1e-6 ? Vector3.Zero : new Vector3((float)(v.x/len),(float)(v.y/len),(float)(v.z/len));
         }
     }
 
@@ -154,6 +154,10 @@ namespace MissionPlanner.Swarm
 
         public void SetDesiredAcceleration(MAVState mav, Vector3 accel) => desiredAccel[mav] = accel;
         public void SetOffsets(MAVState mav, double x, double y, double z) => offsets[mav] = new Vector3((float)x, (float)y, (float)z);
+        // Legacy alias for compatibility
+        public void setOffsets(MAVState mav, double x, double y, double z) => SetOffsets(mav, x, y, z);
+        /// <summary>Get the offset for a follower MAV.</summary>
+        public Vector3 getOffsets(MAVState mav) => offsets.ContainsKey(mav) ? offsets[mav] : Vector3.Zero;
 
         public override void Update()
         {
@@ -161,64 +165,64 @@ namespace MissionPlanner.Swarm
             foreach (var port in MainV2.Comports) mavs.AddRange(port.MAVlist);
             mavs.RemoveAll(m => m.cs.lat == 0 && m.cs.lng == 0);
             if (mavs.Count == 0) return;
-            double sumLat = 0, sumLng = 0, sumAlt = 0;
-            mavs.ForEach(m => { sumLat += m.cs.lat; sumLng += m.cs.lng; sumAlt += m.cs.alt; });
-            payloadPose.Lat = sumLat / mavs.Count;
-            payloadPose.Lng = sumLng / mavs.Count;
-            payloadPose.Alt = sumAlt / mavs.Count;
-            if (Leader == null || Leader.cs.lat == 0) Leader = mavs[0];
+            double sumLat=0, sumLng=0, sumAlt=0;
+            mavs.ForEach(m=>{ sumLat+=m.cs.lat; sumLng+=m.cs.lng; sumAlt+=m.cs.alt; });
+            payloadPose.Lat=sumLat/mavs.Count;
+            payloadPose.Lng=sumLng/mavs.Count;
+            payloadPose.Alt=sumAlt/mavs.Count;
+            if(Leader==null||Leader.cs.lat==0) Leader=mavs[0];
         }
 
         public override void SendCommand()
         {
-            if (payloadPose.Lat == 0 && payloadPose.Lng == 0) return;
-            const float dt = 0.02f;
-            foreach (var port in MainV2.Comports)
-                foreach (var mav in port.MAVlist)
-                {
-                    if (mav == Leader) continue;
-                    var u_ff = desiredAccel.ContainsKey(mav) ? desiredAccel[mav] : Vector3.Zero;
-                    var Phi = ctrl.ComputeMappingMatrix(offsets);
-                    var W = ctrl.ComputePayloadWrench(Leader);
-                    var T = ctrl.ComputeTensions(Phi, W);
-                    int idx = new List<MAVState>(offsets.Keys).IndexOf(mav);
-                    float Ti = idx >= 0 ? (float)MathUtils.Constrain((float)T[idx], 0, float.MaxValue) : 0f;
-                    var q_i = offsets.ContainsKey(mav) ? VectorUtils.Normalize(offsets[mav]) : Vector3.Zero;
-                    var rawComp = q_i * Ti;
-                    var actual = new Vector3(mav.cs.ax, mav.cs.ay, mav.cs.az);
-                    var comp = rawComp * (float)ctrl.CompGainHat;
-                    var error = actual - (u_ff + comp);
-                    ctrl.UpdateCompGain(rawComp, error, dt);
-                    var cmdAccel = u_ff + comp;
-                    SendPositionOrAttitude(port, mav, cmdAccel);
-                }
+            if(payloadPose.Lat==0&&payloadPose.Lng==0) return;
+            const float dt=0.02f;
+            foreach(var port in MainV2.Comports)
+            foreach(var mav in port.MAVlist)
+            {
+                if(mav==Leader) continue;
+                var u_ff = desiredAccel.ContainsKey(mav)?desiredAccel[mav]:Vector3.Zero;
+                var Phi=ctrl.ComputeMappingMatrix(offsets);
+                var W=ctrl.ComputePayloadWrench(Leader);
+                var T=ctrl.ComputeTensions(Phi,W);
+                int idx=new List<MAVState>(offsets.Keys).IndexOf(mav);
+                float Ti=idx>=0?(float)MathUtils.Constrain((float)T[idx],0,float.MaxValue):0f;
+                var q_i=offsets.ContainsKey(mav)?VectorUtils.Normalize(offsets[mav]):Vector3.Zero;
+                var rawComp=q_i*Ti;
+                var actual=new Vector3(mav.cs.ax,mav.cs.ay,mav.cs.az);
+                var comp=rawComp*(float)ctrl.CompGainHat;
+                var error=actual-(u_ff+comp);
+                ctrl.UpdateCompGain(rawComp,error,dt);
+                var cmdAccel=u_ff+comp;
+                SendPositionOrAttitude(port,mav,cmdAccel);
+            }
         }
 
-        private void SendPositionOrAttitude(dynamic port, MAVState mav, Vector3 accel)
+        private void SendPositionOrAttitude(dynamic port,MAVState mav,Vector3 accel)
         {
-            var bearing = new PointLatLngAlt(payloadPose).GetBearing(mav.cs.Location);
-            double yawErr = bearing - mav.cs.yaw;
-            double yawRad = MathUtils.WrapDegrees(yawErr) * MathUtils.Deg2Rad;
-            if (mav.cs.firmware == Firmwares.ArduPlane)
+            var bearing=new PointLatLngAlt(payloadPose).GetBearing(mav.cs.Location);
+            double yawErr=bearing-mav.cs.yaw;
+            double yawRad=MathUtils.WrapDegrees(yawErr)*MathUtils.Deg2Rad;
+            if(mav.cs.firmware==Firmwares.ArduPlane)
             {
-                float roll = (float)Math.Atan2(accel.x, accel.z + (float)FormationConstants.Gravity);
-                float pitch = (float)Math.Atan2(-accel.y, accel.z + (float)FormationConstants.Gravity);
-                var q = Quaternion.from_euler312(roll, pitch, (float)yawRad);
+                float roll=(float)Math.Atan2(accel.x,accel.z+(float)FormationConstants.Gravity);
+                float pitch=(float)Math.Atan2(-accel.y,accel.z+(float)FormationConstants.Gravity);
+                var q=Quaternion.from_euler312(roll,pitch,(float)yawRad);
                 port.sendPacket(new MAVLink.mavlink_set_attitude_target_t
                 {
-                    target_system = mav.sysid,
-                    target_component = mav.compid,
-                    type_mask = 0b10000101,
-                    q = new float[] { (float)q.q1, (float)q.q2, (float)q.q3, (float)q.q4 }
-                }, mav.sysid, mav.compid);
+                    target_system=mav.sysid,
+                    target_component=mav.compid,
+                    type_mask=0b10000101,
+                    q = new float[]{ (float)q.q1, (float)q.q2, (float)q.q3, (float)q.q4 }
+                },mav.sysid,mav.compid);
             }
             else
             {
                 port.setPositionTargetGlobalInt(
-                    mav.sysid, mav.compid, true, true, false, false,
+                    mav.sysid,mav.compid,true,true,false,false,
                     MAVLink.MAV_FRAME.GLOBAL_RELATIVE_ALT_INT,
-                    payloadPose.Lat, payloadPose.Lng, payloadPose.Alt,
-                    accel.x, accel.y, accel.z, 0, 0);
+                    payloadPose.Lat,payloadPose.Lng,payloadPose.Alt,
+                    accel.x,accel.y,accel.z,0,0);
             }
         }
     }
