@@ -1,17 +1,12 @@
-# MissionPlanner
+# MissionPlanner_SwarmControl
 
-![Dot Net](https://github.com/ardupilot/missionplanner/actions/workflows/main.yml/badge.svg) ![Android](https://github.com/ardupilot/missionplanner/actions/workflows/android.yml/badge.svg) ![OSX/IOS](https://github.com/ardupilot/missionplanner/actions/workflows/mac.yml/badge.svg)
+[![License: GPL-3.0](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0.html)
 
-Website : http://ardupilot.org/planner/
+The aim of this repository is to develop a multi-uav controller for collborative transportation of rigid bodied suspended loads. The controller is based on differential flatness and adaptive control taken from **Sreenath, Koushil & Kumar, Vijay. (2013). Dynamics, Control and Planning for Cooperative Manipulation of Payloads Suspended by Cables from Multiple Quadrotor Robots.** and **Su, Yu-Hsiang & Bhowmick, Parijat & Lanzon, Alexander. (2023). A robust adaptive formation control methodology for networked multi-UAV systems with applications to cooperative payload transportation.**
 
-Forum : http://discuss.ardupilot.org/c/ground-control-software/mission-planner
+THIS PROJECT IS SUBMITTED IN PARTIAL FULFILLMENT OF THE REQUIREMENTS FOR THE DEGREE OF BACHELOR OF ENGINEERING (MECHATRONICS ENGINEERING), FACULTY OF ENGINEERING, KING MONGKUT’S UNIVERSITY OF TECHNOLOGY THONBURI, 2024
 
-Download latest stable version : http://firmware.ardupilot.org/Tools/MissionPlanner/MissionPlanner-latest.msi
-
-Changelog : https://github.com/ArduPilot/MissionPlanner/blob/master/ChangeLog.txt
-
-License : https://github.com/ArduPilot/MissionPlanner/blob/master/COPYING.txt
-
+---
 
 ## How to compile
 
@@ -43,14 +38,18 @@ By following these steps, you'll have the necessary components installed and rea
 ###### VSCode
 Currently VSCode with C# plugin is able to parse the code but cannot build.
 
+---
+
 #### 2. Get the code
 
 If you get Visual Studio Community, you should be able to use Git from the IDE. 
-Clone `https://github.com/ArduPilot/MissionPlanner.git` to get the full code.
+Clone `https://github.com/C-PANATORN/MissionPlanner_SwarmControl.git` to get the full code.
 
 In case you didn't install an IDE, you will need to manually install Git. Please follow instruction in https://ardupilot.org/dev/docs/where-to-get-the-code.html#downloading-the-code-using-git
 
 Open a git bash terminal in the MissionPlanner directory and type, "git submodule update --init" to download all submodules
+
+Alternatively, if you have installed MissionPlanner from the main branch, you can manually replace the ".csproj" and "formation.cs" files directly from this repository and compile the code. **Note: if you use this method you need to delete all cashe memory of your previous installation**
 
 #### 3. Build
 
@@ -61,87 +60,111 @@ To build the code:
 ### On other systems
 Building Mission Planner on other systems isn't support currently.
 
-## Launching Mission Planner on other system
+---
 
-Mission Planner is available for Android via the Play Store. https://play.google.com/store/apps/details?id=com.michaeloborne.MissionPlanner
-Mission Planner can be used with Mono on Linux systems. Be aware that not all functions are available on Linux.
-Native MacOS and iOS support is experimental and not recommended for inexperienced users. https://github.com/ArduPilot/MissionPlanner/releases/tag/osxlatest 
-For MacOS users it is recommended to use Mission Planner for Windows via Boot Camp or Parallels (or equivalent).
+## Control Architecture Overview
 
-### On Linux
+At a high level, the control system performs the following tasks in a loop:
+1. **Formation Tracking**: Each UAV computes its desired position relative to the leader, using a fixed geometric offset.
+2. **Feedforward Prediction**: The expected acceleration of the payload is estimated using differential flatness.
+3. **Feedback Correction**: Position and velocity errors are used to compute a corrective acceleration.
+4. **Tension Compensation**: Internal forces from the suspended payload are balanced using a null-space formulation.
+5. **Command Generation**: The total desired acceleration is mapped to attitude and thrust commands, which are sent to each UAV.
+6. **Adaptive Tuning**: Control gains are updated online based on tracking errors to improve robustness.
 
-#### Requirements
+---
 
-Those instructions were tested on Ubuntu 20.04.
-Please install Mono, either :
-- `sudo apt install mono-complete mono-runtime libmono-system-windows-forms4.0-cil libmono-system-core4.0-cil libmono-winforms4.0-cil libmono-corlib4.0-cil libmono-system-management4.0-cil libmono-system-xml-linq4.0-cil`
+### Formation Geometry and Relative Targeting
 
-#### Launching
+Each follower UAV is assigned a desired offset from the leader UAV in the body frame. These offsets define the intended formation pattern (e.g., line, triangle, V-shape). As the leader moves and rotates, each follower uses this offset to determine its desired position in world coordinates.
 
-- Get the lastest zipped version of Mission Planner here : https://firmware.ardupilot.org/Tools/MissionPlanner/MissionPlanner-latest.zip
-- Unzip in the directory you want
-- Go into the directory
-- run with `mono MissionPlanner.exe`
+This is computed in the following block of code:
 
-You can debug Mission Planner on Mono with `MONO_LOG_LEVEL=debug mono MissionPlanner.exe`
+```csharp
+Vector3 off = getOffsets(mav);
+double hdg = -Leader.cs.yaw * (Math.PI / 180.0);
+Vector3 targetUTM = new Vector3(
+    leaderUTM.x + off.x * cos(hdg) - off.y * sin(hdg),
+    leaderUTM.y + off.x * sin(hdg) + off.y * cos(hdg),
+    leaderUTM.z + off.z
+);
+```
 
-### External Services Used
+This performs a 2D rotation of the offset vector based on the leader’s heading, ensuring that the formation maintains its shape even as the leader turns.
 
-| Source | Use | How to disable | Custodian |
-|---|---|---|---|
-| https://firmware.oborne.me  | used as a global cdn for checking for MP update check - checked once per day at startup | edit missionplanner.exe.config | Michael Oborne |
-| https://firmware.ardupilot.org  | used for updates to stable, firmware metadata, firmware, user alerts, gstreamer, SRTM, SITL | updates to stable (edit missionplanner.exe.config) - all others Not possible | Ardupilot Team |
-| https://github.com/ | used for updates to beta | edit missionplanner.exe.config | Michael Oborne |
-| https://raw.githubusercontent.com | old param metadata, sitl config files | Not possible | Ardupilot Team |
-| https://api.github.com/ | ardupilot preload param files | Not possible | Ardupilot Team |
-| https://raw.oborne.me/  | used as glocal cdn for parameter metadata generator, no longer primary source | only used at user request to regenerate, edit missionplanner.exe.config | Michael Oborne |
-| https://maps.google.com  | used for elevation api - removed due to abuse | N/A | N/A |
-| https://discuss.cubepilot.org/ | use for SB2 reporting - only on affected boards when user enters details | only used at user request | CubePilot |
-| https://altitudeangel.com  | utm data - user enabled | only used at user request | Altitude Angel |
-| https://autotest.ardupilot.org  | dataflash log meta data, parameter metadata | Not Possible | Ardupilot Team |
-| Many | your choice of map provider google/bing/openstreetmap/etc | User selectable | User/Many |
-| https://www.cloudflare.com | geo location provider - for NFZ selection | Not Possible | Michael Oborne |
-| https://esua.cad.gov.hk | HK no fly zones - user enabled | User selectable | HK Gov |
-| https://ssl.google-analytics.com | Google Analytics Anonymous Stats - Screen Loads, Exceptions/Crashs, Events (Connect), Startup Timing, FW upload (FW Type and Board Type) | disable in Config > Planner > OptOut Anon Stats | Michael Oborne |
-| https://api.dronelogbook.com | logging - disabled | N/A | N/A |
-| https://ardupilot.org | help urls on many pages | User Initiated | ArduPilot Team |
-| https://www.youtube.com | help videos on many pages | User Initiated | ArduPilot Team |
-| https://files.rfdesign.com.au | RFD firmwares | User Initiated | RFDesign |
-| https://teck.airmarket.io | airmarket - disabled | N/A | N/A |
+---
 
-### Offline Use - No Internet
+### Feedforward Acceleration via Differential Flatness
 
-| Location | Use | Transferable between pcs |
-|---|---|---|
-| C:\ProgramData\Mission Planner\gmapcache | Map cache | yes |
-| C:\ProgramData\Mission Planner\srtm | Elevation data cache | yes |
-| C:\ProgramData\Mission Planner\\*.pdef.xml | Parameter cache | yes |
-| C:\ProgramData\Mission Planner\LogMessages*.xml | DF Log metadata cache | yes |
+Differential flatness allows the system to compute the desired trajectory and its derivatives directly. The feedforward acceleration is derived from the leader's motion and includes linear acceleration as well as centripetal and tangential components:
 
-on linux this is in /home/<user>/.local/share/Mission Planner/
+```csharp
+Vector3 aL = new Vector3(Leader.cs.ax, Leader.cs.ay, Leader.cs.az);
+float yawRate = EstimateYawRate(Leader);
+float yawAccel = (yawRate - previousYaw) / dt;
+Vector3 a_cent = new Vector3(-yawRate^2 * offset.x, -yawRate^2 * offset.y, 0);
+Vector3 a_tan = new Vector3(-offset.y * yawAccel, offset.x * yawAccel, 0);
+Vector3 a_ff = aL + a_cent + a_tan;
+```
 
-### Offline Data Supported
-#### Elevation
-* SRTM Cache
-* GeoTiff's in WGS84/EGM96
-* DTED
+---
 
-#### Images
-* Map Cache
-* WMS
-* WMTS
-* GDAL
+### Adaptive Feedback Regulation
 
-### Paths used - Default
+Position and velocity errors are used to compute a correction term. This forms the second part of the control input:
 
-| Location | Use |
-|---|---|
-| C:\ProgramData\Mission Planner | All cross user content |
-| C:\Users\USERNAME\Documents\Mission Planner | All per user content |
+```csharp
+Vector3 e_pos = targetPosition - currentPosition;
+Vector3 e_vel = targetVelocity - currentVelocity;
+Vector3 a_fb = e_pos * Kp + e_vel * Kv;
+```
 
-on linux this is in /home/<user>/.local/share/Mission Planner/
+This adaptive PD controller improves resilience against disturbances and modeling errors.
 
-### CA Cert
-A CA cert is installed to the root store and used to sign the windows serial port drivers, and is installed as part of the MSI install.
+---
 
-[![FlagCounter](https://s01.flagcounter.com/count2/A4bA/bg_FFFFFF/txt_000000/border_CCCCCC/columns_8/maxflags_40/viewers_0/labels_1/pageviews_0/flags_0/percent_0/)](https://info.flagcounter.com/A4bA)
+### Compensation for Payload-Induced Forces
+
+To stabilize the payload, internal cable tensions are computed using a pseudoinverse and null-space approach. This method ensures force equilibrium without overconstraining the system:
+
+```csharp
+Vector3 compensation = payloadController.CompensateRigidBodyDynamics(Leader, Follower, offsets);
+```
+
+This solves the system:
+
+```
+Φ T = W,  T = Φ⁺ W + N Λ
+```
+
+Where Φ is the wrench matrix, W is the desired net force and torque on the payload, and NΛ is the internal force distribution.
+
+---
+
+### Acceleration-to-Attitude Mapping and Command Transmission
+
+The final acceleration vector is transformed into pitch, roll, and thrust commands:
+
+```csharp
+phi = asin(u.y / g)
+theta = asin(-u.x / g)
+thrust = (u.z + g) / g
+```
+
+The command is transmitted to the UAVs using MAVLink in quaternion form.
+
+---
+
+### Online Gain Adaptation via σ-Modification
+
+Gains are adjusted online based on squared error magnitudes:
+
+```csharp
+Kp += gammaKp * positionError^2 * dt;
+Kv += gammaKv * velocityError^2 * dt;
+payloadGain += gammaPayload * tensionError * dt;
+```
+
+This allows the controller to remain robust under changing conditions.
+
+---
