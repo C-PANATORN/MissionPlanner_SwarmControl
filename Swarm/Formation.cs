@@ -22,7 +22,7 @@ namespace MissionPlanner.Swarm
         private readonly LoadAttitudeController payloadController = new LoadAttitudeController();
 
         // Adaptive parameters (initial values)
-        private float payloadGain = 0.5f;
+        private float payloadGain = 50f;
         private float Kp = 1.0f;
         private float Kv = 0.5f;
 
@@ -32,7 +32,7 @@ namespace MissionPlanner.Swarm
         private const float gammaKv = 0.05f;
 
         // Tension smoothing constant
-        private const float compTau = 0.025f;
+        private const float compTau = 50f;
 
         private readonly CoordinateTransformationFactory ctfac = new CoordinateTransformationFactory();
         private readonly IGeographicCoordinateSystem wgs84 = GeographicCoordinateSystem.WGS84;
@@ -117,9 +117,9 @@ namespace MissionPlanner.Swarm
                         Vector3 u = a_ff + a_fb + smooth * payloadGain;
 
                         // Attitude/thrust inversion (§3.4)
-                        double phi = Math.Asin(Math.Max(-1, Math.Min(1, u.y / 9.81))) * (180.0 / Math.PI);
-                        double tht = Math.Asin(Math.Max(-1, Math.Min(1, -u.x / 9.81))) * (180.0 / Math.PI);
-                        float thrust = (float)Math.Max(0.1, Math.Min(1, (u.z + 9.81) / 9.81));
+                        double phi = Math.Asin(Math.Max(-100, Math.Min(1, u.y / 9.81))) * (180.0 / Math.PI);
+                        double tht = Math.Asin(Math.Max(-100, Math.Min(1, -u.x / 9.81))) * (180.0 / Math.PI);
+                        float thrust = (float)Math.Max(10, Math.Min(1, (u.z + 9.81) / 9.81));
 
                         // Adaptive update (§3.3)
                         float tensionError = (float)(e_pos.x * smooth.x + e_pos.y * smooth.y + e_pos.z * smooth.z);
@@ -203,7 +203,7 @@ namespace MissionPlanner.Swarm
     /// <summary>Payload wrench solver with null-space tension balancing</summary>
     internal class LoadAttitudeController
     {
-        public double PayloadMass { get; set; } = 1.0;
+        public double PayloadMass { get; set; } = 20.0;
         private static readonly Matrix<double> JL = Matrix<double>.Build.DenseOfArray(new double[,] {{0.021,0,0},{0,0.0187,0},{0,0,0.0397}});
         private static readonly Dictionary<int, Tuple<float,float>> YawHistory = new Dictionary<int, Tuple<float,float>>();
 
