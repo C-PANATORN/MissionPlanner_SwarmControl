@@ -54,7 +54,3 @@ To build the code:
 
 ### On other systems
 Building Mission Planner on other systems isn't support currently.
-
----
-
-![Thesis Poster: Presented at King Mongkut's University of Technology Thonburi (KMUTT) ProjectDay 2025](./Images/MCE12_PE.png)
