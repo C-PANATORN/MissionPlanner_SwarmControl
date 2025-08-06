@@ -2,13 +2,6 @@
 
 [![License: GPL-3.0](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0.html)
 
-The aim of this repository is to develop a multi-uav controller for collborative transportation of rigid bodied suspended loads. The controller is based on differential flatness and adaptive control taken from **Sreenath, Koushil & Kumar, Vijay. (2013). Dynamics, Control and Planning for Cooperative Manipulation of Payloads Suspended by Cables from Multiple Quadrotor Robots.** and **Su, Yu-Hsiang & Bhowmick, Parijat & Lanzon, Alexander. (2023). A robust adaptive formation control methodology for networked multi-UAV systems with applications to cooperative payload transportation.**
-
-![Collaborative Drone Transportation: Tested at King Mongkut's University of Technology Thonburi (KMUTT) 8 May 2025](./Images/MCE12_Test.jpg)
-
-THIS PROJECT IS SUBMITTED IN PARTIAL FULFILLMENT OF THE REQUIREMENTS FOR THE DEGREE OF BACHELOR OF ENGINEERING (MECHATRONICS ENGINEERING), FACULTY OF ENGINEERING, KING MONGKUT’S UNIVERSITY OF TECHNOLOGY THONBURI, 2024
-
----
 
 ## How to compile
 
