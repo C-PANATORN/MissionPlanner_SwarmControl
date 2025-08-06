@@ -1,24 +1,12 @@
 # MissionPlanner_SwarmControl
 
-[![License: GPL-3.0](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0.html)
-
-
-TEST
-
+![Dot Net](https://github.com/ardupilot/missionplanner/actions/workflows/main.yml/badge.svg) ![Android](https://github.com/ardupilot/missionplanner/actions/workflows/android.yml/badge.svg) ![OSX/IOS](https://github.com/ardupilot/missionplanner/actions/workflows/mac.yml/badge.svg)
 
 ## How to compile
 
 ### On Windows (Recommended)
 
 #### 1. Install software
-
-##### Main requirements
-
-Currently, Mission Planner needs:
-
-Visual Studio 2022
-
-##### IDE
 
 ### Visual Studio Community
 To compile Mission Planner, we recommend using Visual Studio. You can download Visual Studio Community from the [Visual Studio Download page](https://visualstudio.microsoft.com/downloads/ "Visual Studio Download page").
@@ -40,13 +28,24 @@ Currently VSCode with C# plugin is able to parse the code but cannot build.
 
 #### 2. Get the code
 
+#### Method 1 Install using IDE
 If you get Visual Studio Community, you should be able to use Git from the IDE. 
 Clone `https://github.com/C-PANATORN/MissionPlanner_SwarmControl.git` to get the full code.
 
-In case you didn't install an IDE, you will need to manually install Git. Please follow instruction in https://ardupilot.org/dev/docs/where-to-get-the-code.html#downloading-the-code-using-git
-
 Open a git bash terminal in the MissionPlanner directory and type, "git submodule update --init" to download all submodules
 
+#### Method 2 Install using Git (Recommended)
+
+For users unfamiliar with Visual Studio Community, it is recommended to manually install the code using Git
+```bash
+git clone --recurse-submodules https://github.com/C-PANATORN/MissionPlanner_SwarmControl.git
+```
+From the MissionPlanner directory download all submodules
+```bash
+git submodule init
+```
+
+#### Method 3
 Alternatively, if you have installed MissionPlanner from the main branch, you can manually replace the ".csproj" and "formation.cs" files directly from this repository and compile the code. **Note: if you use this method you need to delete all cashe memory of your previous installation**
 
 #### 3. Build
@@ -54,6 +53,8 @@ Alternatively, if you have installed MissionPlanner from the main branch, you ca
 To build the code:
 - Open MissionPlanner.sln with Visual Studio
 - From the Build menu, select "Build MissionPlanner"
+
+**Note: if you run into build issue, please make sure Visual Studio and Git Submodules are propperly configured**
 
 ### On other systems
 Building Mission Planner on other systems isn't support currently.
