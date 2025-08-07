@@ -738,14 +738,20 @@ namespace MissionPlanner.GCSViews
 
             foreach (var tabname in tabarray)
             {
+                bool added = false;
                 foreach (TabPage tabPage in TabListOriginal)
                 {
                     if (tabPage.Name == tabname && ((TabListDisplay.ContainsKey(tabname) && TabListDisplay[tabname] == true) || !TabListDisplay.ContainsKey(tabname)))
                     {
                         tabControlactions.TabPages.Add(tabPage);
+                        log.Debug("add tabControlactions " + tabPage.Name);
+                        added = true;
                         break;
                     }
                 }
+
+                if(!added)
+                    log.Debug("not added to tabControlactions " + tabname);
             }
         }
 
@@ -1057,7 +1063,7 @@ namespace MissionPlanner.GCSViews
             }
             catch
             {
-                CustomMessageBox.Show(Strings.ErrorNoResponce, Strings.ERROR);
+                CustomMessageBox.Show(Strings.ErrorNoResponse, Strings.ERROR);
             }
         }
 
@@ -1249,7 +1255,7 @@ namespace MissionPlanner.GCSViews
             }
             catch
             {
-                CustomMessageBox.Show(Strings.ErrorNoResponce, Strings.ERROR);
+                CustomMessageBox.Show(Strings.ErrorNoResponse, Strings.ERROR);
             }
         }
 
@@ -1390,7 +1396,7 @@ namespace MissionPlanner.GCSViews
             }
             catch
             {
-                CustomMessageBox.Show(Strings.ErrorNoResponce, Strings.ERROR);
+                CustomMessageBox.Show(Strings.ErrorNoResponse, Strings.ERROR);
             }
         }
 
@@ -1545,7 +1551,7 @@ namespace MissionPlanner.GCSViews
 
                                 if (timeout > 30)
                                 {
-                                    CustomMessageBox.Show(Strings.ErrorNoResponce, Strings.ERROR);
+                                    CustomMessageBox.Show(Strings.ErrorNoResponse, Strings.ERROR);
                                     return;
                                 }
                             }
@@ -1560,7 +1566,7 @@ namespace MissionPlanner.GCSViews
 
                                 if (timeout > 30)
                                 {
-                                    CustomMessageBox.Show(Strings.ErrorNoResponce, Strings.ERROR);
+                                    CustomMessageBox.Show(Strings.ErrorNoResponse, Strings.ERROR);
                                     return;
                                 }
                             }
@@ -1580,7 +1586,7 @@ namespace MissionPlanner.GCSViews
 
                                 if (timeout > 40)
                                 {
-                                    CustomMessageBox.Show(Strings.ErrorNoResponce, Strings.ERROR);
+                                    CustomMessageBox.Show(Strings.ErrorNoResponse, Strings.ERROR);
                                     return;
                                 }
                             }
@@ -1596,7 +1602,7 @@ namespace MissionPlanner.GCSViews
 
                             if (timeout > 30)
                             {
-                                CustomMessageBox.Show(Strings.ErrorNoResponce, Strings.ERROR);
+                                CustomMessageBox.Show(Strings.ErrorNoResponse, Strings.ERROR);
                                 return;
                             }
                         }
@@ -2553,7 +2559,7 @@ namespace MissionPlanner.GCSViews
                     tabs = Settings.Instance["tabcontrolactions"];
                 }
 
-                string[] tabarray = tabs.Split(';');
+                string[] tabarray = tabs.Split(';').Distinct().ToArray();
 
                 foreach (TabPage tabPage in TabListOriginal)
                 {
@@ -6306,6 +6312,9 @@ namespace MissionPlanner.GCSViews
 
         private void updateTransponder()
         {
+            if (MainV2.comPort.BaseStream == null || !MainV2.comPort.BaseStream.IsOpen)
+                return;
+
             if (!MainV2.comPort.MAV.cs.xpdr_status_pending)
             {
                 // timeout on status message
@@ -6336,8 +6345,8 @@ namespace MissionPlanner.GCSViews
                 if (transponderNeverConnected)
                 {
                     // subscribe to status message on first connection
-                    MainV2.comPort.doCommand(MAVLink.MAV_CMD.SET_MESSAGE_INTERVAL, (float) MAVLink.MAVLINK_MSG_ID.UAVIONIX_ADSB_OUT_STATUS, (float) 1000000.0, 0, 0, 0, 0, 0);
-                    transponderNeverConnected = false;
+                    MainV2.comPort.doCommand(MAVLink.MAV_CMD.SET_MESSAGE_INTERVAL, (float)MAVLink.MAVLINK_MSG_ID.UAVIONIX_ADSB_OUT_STATUS, (float)1000000.0, 0, 0, 0, 0, 0);
+                        transponderNeverConnected = false;
                 }
 
                 STBY_btn.Enabled = true;
