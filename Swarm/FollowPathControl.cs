@@ -103,9 +103,11 @@ namespace MissionPlanner.Swarm
         {
             if (SwarmInterface != null)
             {
-                SwarmInterface.Takeoff();
+                float takeoffAltitude = 5.0f; // กำหนดความสูง takeoff ที่ต้องการ
+                SwarmInterface.Takeoff(takeoffAltitude);
             }
         }
+
 
         private void BUT_Land_Click(object sender, EventArgs e)
         {

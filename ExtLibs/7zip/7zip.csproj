@@ -1,26 +1,28 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
+	<PropertyGroup>
+		<TargetFrameworks>net40</TargetFrameworks>
+		<ApplicationIcon />
+		<OutputTypeEx>library</OutputTypeEx>
+		<StartupObject />
+		<AllowUnsafeBlocks>false</AllowUnsafeBlocks>
+		<DebugType>portable</DebugType>
+		<DebugSymbols>True</DebugSymbols>
+		<Description>7zip</Description>
+		<NeutralLanguage>en</NeutralLanguage>
+		<GenerateAssemblyInfo>false</GenerateAssemblyInfo>
+		<GenerateTargetFrameworkAttribute>false</GenerateTargetFrameworkAttribute>
+		<GenerateAssemblyVersionAttribute>false</GenerateAssemblyVersionAttribute>
+		<GenerateAssemblyFileVersionAttribute>false</GenerateAssemblyFileVersionAttribute>
+	</PropertyGroup>
 
-  <PropertyGroup>
-    <TargetFrameworks>netstandard2.0</TargetFrameworks>
-    <ApplicationIcon />
-    <OutputTypeEx>library</OutputTypeEx>
-    <StartupObject />
-    <AllowUnsafeBlocks>false</AllowUnsafeBlocks>
-    <DebugType>portable</DebugType>
-    <DebugSymbols>True</DebugSymbols>
-    <Description>7zip</Description>
-    <NeutralLanguage>en</NeutralLanguage>
+	<ItemGroup>
+		<Compile Remove="Compress\LzmaAlone\Properties\AssemblyInfo.cs" />
+		<Compile Remove="Compress\LzmaAlone\Properties\Settings.cs" />
+		<Compile Remove="Compress\LzmaAlone\obj\**\*.AssemblyAttributes.cs" />
+	</ItemGroup>
 
-  </PropertyGroup>
-
-  <ItemGroup>
-    <Compile Remove="Compress\LzmaAlone\Properties\AssemblyInfo.cs" />
-    <Compile Remove="Compress\LzmaAlone\Properties\Settings.cs" />
-  </ItemGroup>
-
-  <ItemGroup>
-    <None Include="Compress\LzmaAlone\Properties\AssemblyInfo.cs" />
-    <None Include="Compress\LzmaAlone\Properties\Settings.cs" />
-  </ItemGroup>
-
+	<ItemGroup>
+		<None Include="Compress\LzmaAlone\Properties\AssemblyInfo.cs" />
+		<None Include="Compress\LzmaAlone\Properties\Settings.cs" />
+	</ItemGroup>
 </Project>

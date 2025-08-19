@@ -7,6 +7,7 @@ using System.Drawing;
 using System.Windows.Forms;
 using GeoAPI.CoordinateSystems;
 using GeoAPI.CoordinateSystems.Transformations;
+using System.Threading.Tasks;
 
 namespace MissionPlanner.Swarm
 {
@@ -54,13 +55,9 @@ namespace MissionPlanner.Swarm
         void FollowLeaderControl_MouseWheel(object sender, MouseEventArgs e)
         {
             if (e.Delta < 0)
-            {
                 grid1.setScale(grid1.getScale() + 4);
-            }
             else
-            {
                 grid1.setScale(grid1.getScale() - 4);
-            }
         }
 
         void updateicons()
@@ -130,47 +127,76 @@ namespace MissionPlanner.Swarm
 
             while (threadrun && !this.IsDisposed)
             {
-                // update leader pos
-                SwarmInterface.Update();
+                SwarmInterface.Update();       // update leader pos
+                SwarmInterface.SendCommand();  // update other mavs
 
-                // update other mavs
-                SwarmInterface.SendCommand();
-
-                // 10 hz
-                System.Threading.Thread.Sleep(100);
+                System.Threading.Thread.Sleep(100); // 10 Hz
             }
         }
 
         private void BUT_Arm_Click(object sender, EventArgs e)
         {
-            if (SwarmInterface != null)
-            {
-                SwarmInterface.Arm();
-            }
+            if (SwarmInterface != null) SwarmInterface.Arm();
         }
 
         private void BUT_Disarm_Click(object sender, EventArgs e)
         {
-            if (SwarmInterface != null)
+            if (SwarmInterface != null) SwarmInterface.Disarm();
+        }
+
+        // UPDATED: ไม่เรียก dialog แล้ว อ่านค่าจาก NUM_TakeoffAltitude/TXT_TakeoffAltitude
+        private async void BUT_Takeoff_Click(object sender, EventArgs e)
+        {
+            if (SwarmInterface == null) return;
+
+            float altitude = GetTakeoffAltitudeFromMainUI();
+            if (altitude <= 0f)
             {
-                SwarmInterface.Disarm();
+                MessageBox.Show("กรุณากำหนดความสูงที่มากกว่า 0 เมตร", "Invalid altitude",
+                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            if (MainV2.Comports == null || MainV2.Comports.Count == 0)
+            {
+                MessageBox.Show("ยังไม่มีการเชื่อมต่อโดรน/คอมพอร์ต", "Warning",
+                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            var btn = sender as Control;
+            var old = Cursor.Current;
+            try
+            {
+                if (btn != null) btn.Enabled = false;
+                Cursor.Current = Cursors.WaitCursor;
+
+                await Task.Run(() => SwarmInterface.Takeoff(altitude));
+            }
+            finally
+            {
+                Cursor.Current = old;
+                if (btn != null) btn.Enabled = true;
             }
         }
 
-        private void BUT_Takeoff_Click(object sender, EventArgs e)
+        private float GetTakeoffAltitudeFromMainUI()
         {
-            if (SwarmInterface != null)
-            {
-                SwarmInterface.Takeoff();
-            }
+            // ใช้ NumericUpDown ถ้ามี
+            if (this.Controls["NUM_TakeoffAltitude"] is NumericUpDown num)
+                return Math.Max(0.5f, (float)num.Value);
+
+            // fallback: รองรับ TextBox เดิม ถ้ายังมีอยู่
+            if (this.Controls["TXT_TakeoffAltitude"] is TextBox tb &&
+                float.TryParse(tb.Text, out float alt))
+                return Math.Max(0.5f, alt);
+
+            return 5.0f; // default
         }
 
         private void BUT_Land_Click(object sender, EventArgs e)
         {
-            if (SwarmInterface != null)
-            {
-                SwarmInterface.Land();
-            }
+            if (SwarmInterface != null) SwarmInterface.Land();
         }
 
         private void BUT_leader_Click(object sender, EventArgs e)
@@ -185,7 +211,8 @@ namespace MissionPlanner.Swarm
                     {
                         var vector = SwarmInterface.getOffsets(mav);
 
-                        SwarmInterface.setOffsets(mav, (float)(vector.x - vectorlead.x),
+                        SwarmInterface.setOffsets(mav,
+                            (float)(vector.x - vectorlead.x),
                             (float)(vector.y - vectorlead.y),
                             (float)(vector.z - vectorlead.z));
                     }
@@ -220,36 +247,31 @@ namespace MissionPlanner.Swarm
 
         public Vector3 getOffsetFromLeader(MAVState leader, MAVState mav)
         {
-            //convert Wgs84ConversionInfo to utm
             CoordinateTransformationFactory ctfac = new CoordinateTransformationFactory();
-
             IGeographicCoordinateSystem wgs84 = GeographicCoordinateSystem.WGS84;
 
             int utmzone = (int)((leader.cs.lng - -186.0) / 6.0);
-
-            IProjectedCoordinateSystem utm = ProjectedCoordinateSystem.WGS84_UTM(utmzone,
-                leader.cs.lat < 0 ? false : true);
+            IProjectedCoordinateSystem utm = ProjectedCoordinateSystem.WGS84_UTM(utmzone, leader.cs.lat >= 0);
 
             ICoordinateTransformation trans = ctfac.CreateFromCoordinateSystems(wgs84, utm);
 
             double[] masterpll = { leader.cs.lng, leader.cs.lat };
-
-            // get leader utm coords
             double[] masterutm = trans.MathTransform.Transform(masterpll);
 
             double[] mavpll = { mav.cs.lng, mav.cs.lat };
-
-            //getLeader follower utm coords
             double[] mavutm = trans.MathTransform.Transform(mavpll);
 
             var heading = -leader.cs.yaw;
-
             var norotation = new Vector3(masterutm[1] - mavutm[1], masterutm[0] - mavutm[0], 0);
 
             norotation.x *= -1;
             norotation.y *= -1;
 
-            return new Vector3(norotation.x * Math.Cos(heading * MathHelper.deg2rad) - norotation.y * Math.Sin(heading * MathHelper.deg2rad), norotation.x * Math.Sin(heading * MathHelper.deg2rad) + norotation.y * Math.Cos(heading * MathHelper.deg2rad), 0);
+            return new Vector3(
+                norotation.x * Math.Cos(heading * MathHelper.deg2rad) - norotation.y * Math.Sin(heading * MathHelper.deg2rad),
+                norotation.x * Math.Sin(heading * MathHelper.deg2rad) + norotation.y * Math.Cos(heading * MathHelper.deg2rad),
+                0
+            );
         }
 
         private void grid1_UpdateOffsets(MAVState mav, float x, float y, float z, Grid.icon ico)
@@ -303,18 +325,13 @@ namespace MissionPlanner.Swarm
                     foreach (var mav in port.MAVlist)
                     {
                         if (mav == (MAVState)ctl.Tag)
-                        {
                             match = true;
-
-                        }
                     }
                 }
-
-                if (match == false)
-                    ctl.Dispose();
+                if (!match) ctl.Dispose();
             }
 
-            // setup new
+            // setup new / refresh
             foreach (var port in MainV2.Comports)
             {
                 foreach (var mav in port.MAVlist)
@@ -325,23 +342,14 @@ namespace MissionPlanner.Swarm
                         if (ctl is Status && ctl.Tag == mav)
                         {
                             exists = true;
-                            ((Status)ctl).GPS.Text = mav.cs.gpsstatus >= 3 ? "OK" : "Bad";
-                            ((Status)ctl).Armed.Text = mav.cs.armed.ToString();
-                            ((Status)ctl).Mode.Text = mav.cs.mode;
-                            ((Status)ctl).MAV.Text = mav.ToString();
-                            ((Status)ctl).Guided.Text = mav.GuidedMode.x / 1e7 + "," + mav.GuidedMode.y / 1e7 + "," +
-                                                         mav.GuidedMode.z;
-                            ((Status)ctl).Location1.Text = mav.cs.lat + "," + mav.cs.lng + "," +
-                                                            mav.cs.alt;
+                            ((Status)ctl).GPS.Text      = mav.cs.gpsstatus >= 3 ? "OK" : "Bad";
+                            ((Status)ctl).Armed.Text    = mav.cs.armed.ToString();
+                            ((Status)ctl).Mode.Text     = mav.cs.mode;
+                            ((Status)ctl).MAV.Text      = mav.ToString();
+                            ((Status)ctl).Guided.Text   = mav.GuidedMode.x / 1e7 + "," + mav.GuidedMode.y / 1e7 + "," + mav.GuidedMode.z;
+                            ((Status)ctl).Location1.Text= mav.cs.lat + "," + mav.cs.lng + "," + mav.cs.alt;
 
-                            if (mav == SwarmInterface.Leader)
-                            {
-                                ((Status)ctl).ForeColor = Color.Red;
-                            }
-                            else
-                            {
-                                ((Status)ctl).ForeColor = Color.Black;
-                            }
+                            ((Status)ctl).ForeColor = (mav == SwarmInterface.Leader) ? Color.Red : Color.Black;
                         }
                     }
 
@@ -357,18 +365,12 @@ namespace MissionPlanner.Swarm
 
         private void but_guided_Click(object sender, EventArgs e)
         {
-            if (SwarmInterface != null)
-            {
-                SwarmInterface.GuidedMode();
-            }
+            if (SwarmInterface != null) SwarmInterface.GuidedMode();
         }
 
         private void but_auto_Click(object sender, EventArgs e)
         {
-            if (SwarmInterface != null)
-            {
-                SwarmInterface.AutoMode();
-            }
+            if (SwarmInterface != null) SwarmInterface.AutoMode();
         }
     }
 }

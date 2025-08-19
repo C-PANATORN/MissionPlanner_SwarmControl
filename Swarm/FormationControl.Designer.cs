@@ -2,30 +2,19 @@
 {
     partial class FormationControl
     {
-        /// <summary>
-        /// Required designer variable.
-        /// </summary>
         private System.ComponentModel.IContainer components = null;
 
-        /// <summary>
-        /// Clean up any resources being used.
-        /// </summary>
-        /// <param name="disposing">true if managed resources should be disposed; otherwise, false.</param>
+        // NEW: controls for altitude on main UI
+        private System.Windows.Forms.Label LBL_TakeoffAltitude;
+        private System.Windows.Forms.NumericUpDown NUM_TakeoffAltitude;
+
         protected override void Dispose(bool disposing)
         {
-            if (disposing && (components != null))
-            {
-                components.Dispose();
-            }
+            if (disposing && (components != null)) components.Dispose();
             base.Dispose(disposing);
         }
 
         #region Windows Form Designer generated code
-
-        /// <summary>
-        /// Required method for Designer support - do not modify
-        /// the contents of this method with the code editor.
-        /// </summary>
         private void InitializeComponent()
         {
             this.components = new System.ComponentModel.Container();
@@ -45,13 +34,18 @@
             this.timer_status = new System.Windows.Forms.Timer(this.components);
             this.but_guided = new MissionPlanner.Controls.MyButton();
             this.but_auto = new MissionPlanner.Controls.MyButton();
+
+            // NEW
+            this.LBL_TakeoffAltitude = new System.Windows.Forms.Label();
+            this.NUM_TakeoffAltitude = new System.Windows.Forms.NumericUpDown();
+
             ((System.ComponentModel.ISupportInitialize)(this.bindingSource1)).BeginInit();
             this.tabControl1.SuspendLayout();
             this.tabPage1.SuspendLayout();
+            ((System.ComponentModel.ISupportInitialize)(this.NUM_TakeoffAltitude)).BeginInit();
             this.SuspendLayout();
-            // 
+
             // CMB_mavs
-            // 
             this.CMB_mavs.DataSource = this.bindingSource1;
             this.CMB_mavs.FormattingEnabled = true;
             this.CMB_mavs.Location = new System.Drawing.Point(336, 12);
@@ -59,9 +53,8 @@
             this.CMB_mavs.Size = new System.Drawing.Size(121, 21);
             this.CMB_mavs.TabIndex = 4;
             this.CMB_mavs.SelectedIndexChanged += new System.EventHandler(this.CMB_mavs_SelectedIndexChanged);
-            // 
+
             // grid1
-            // 
             this.grid1.Dock = System.Windows.Forms.DockStyle.Fill;
             this.grid1.Location = new System.Drawing.Point(3, 3);
             this.grid1.Name = "grid1";
@@ -69,9 +62,8 @@
             this.grid1.TabIndex = 8;
             this.grid1.Vertical = false;
             this.grid1.UpdateOffsets += new MissionPlanner.Swarm.Grid.UpdateOffsetsEvent(this.grid1_UpdateOffsets);
-            // 
+
             // BUT_Start
-            // 
             this.BUT_Start.Enabled = false;
             this.BUT_Start.Location = new System.Drawing.Point(787, 12);
             this.BUT_Start.Name = "BUT_Start";
@@ -80,9 +72,8 @@
             this.BUT_Start.Text = "Start";
             this.BUT_Start.UseVisualStyleBackColor = true;
             this.BUT_Start.Click += new System.EventHandler(this.BUT_Start_Click);
-            // 
+
             // BUT_leader
-            // 
             this.BUT_leader.Location = new System.Drawing.Point(463, 12);
             this.BUT_leader.Name = "BUT_leader";
             this.BUT_leader.Size = new System.Drawing.Size(75, 23);
@@ -90,61 +81,55 @@
             this.BUT_leader.Text = "Set Leader";
             this.BUT_leader.UseVisualStyleBackColor = true;
             this.BUT_leader.Click += new System.EventHandler(this.BUT_leader_Click);
-            // 
+
             // BUT_Land
-            // 
             this.BUT_Land.Location = new System.Drawing.Point(255, 12);
             this.BUT_Land.Name = "BUT_Land";
             this.BUT_Land.Size = new System.Drawing.Size(75, 23);
             this.BUT_Land.TabIndex = 3;
-            this.BUT_Land.Text = "Land (all)";
+            this.BUT_Land.Text = "Land (All)";
             this.BUT_Land.UseVisualStyleBackColor = true;
             this.BUT_Land.Click += new System.EventHandler(this.BUT_Land_Click);
-            // 
+
             // BUT_Takeoff
-            // 
             this.BUT_Takeoff.Location = new System.Drawing.Point(174, 12);
             this.BUT_Takeoff.Name = "BUT_Takeoff";
             this.BUT_Takeoff.Size = new System.Drawing.Size(75, 23);
             this.BUT_Takeoff.TabIndex = 2;
-            this.BUT_Takeoff.Text = "Takeoff";
+            this.BUT_Takeoff.Text = "Takeoff (All)";
             this.BUT_Takeoff.UseVisualStyleBackColor = true;
             this.BUT_Takeoff.Click += new System.EventHandler(this.BUT_Takeoff_Click);
-            // 
+
             // BUT_Disarm
-            // 
             this.BUT_Disarm.Location = new System.Drawing.Point(93, 12);
             this.BUT_Disarm.Name = "BUT_Disarm";
             this.BUT_Disarm.Size = new System.Drawing.Size(75, 23);
             this.BUT_Disarm.TabIndex = 1;
-            this.BUT_Disarm.Text = "Disarm (exl leader)";
+            this.BUT_Disarm.Text = "Disarm";
             this.BUT_Disarm.UseVisualStyleBackColor = true;
             this.BUT_Disarm.Click += new System.EventHandler(this.BUT_Disarm_Click);
-            // 
+
             // BUT_Arm
-            // 
             this.BUT_Arm.Location = new System.Drawing.Point(12, 12);
             this.BUT_Arm.Name = "BUT_Arm";
             this.BUT_Arm.Size = new System.Drawing.Size(75, 23);
             this.BUT_Arm.TabIndex = 0;
-            this.BUT_Arm.Text = "Arm (exl leader)";
+            this.BUT_Arm.Text = "Force Arm (All)";
             this.BUT_Arm.UseVisualStyleBackColor = true;
             this.BUT_Arm.Click += new System.EventHandler(this.BUT_Arm_Click);
-            // 
+
             // tabControl1
-            // 
-            this.tabControl1.Anchor = ((System.Windows.Forms.AnchorStyles)((((System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Bottom) 
-            | System.Windows.Forms.AnchorStyles.Left) 
-            | System.Windows.Forms.AnchorStyles.Right)));
+            this.tabControl1.Anchor = ((System.Windows.Forms.AnchorStyles)((((System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Bottom)
+                        | System.Windows.Forms.AnchorStyles.Left)
+                        | System.Windows.Forms.AnchorStyles.Right)));
             this.tabControl1.Controls.Add(this.tabPage1);
             this.tabControl1.Location = new System.Drawing.Point(12, 39);
             this.tabControl1.Name = "tabControl1";
             this.tabControl1.SelectedIndex = 0;
             this.tabControl1.Size = new System.Drawing.Size(769, 420);
             this.tabControl1.TabIndex = 9;
-            // 
+
             // tabPage1
-            // 
             this.tabPage1.Controls.Add(this.grid1);
             this.tabPage1.Location = new System.Drawing.Point(4, 22);
             this.tabPage1.Name = "tabPage1";
@@ -153,9 +138,8 @@
             this.tabPage1.TabIndex = 0;
             this.tabPage1.Text = "Stage 1";
             this.tabPage1.UseVisualStyleBackColor = true;
-            // 
+
             // BUT_Updatepos
-            // 
             this.BUT_Updatepos.Enabled = false;
             this.BUT_Updatepos.Location = new System.Drawing.Point(706, 12);
             this.BUT_Updatepos.Name = "BUT_Updatepos";
@@ -164,46 +148,62 @@
             this.BUT_Updatepos.Text = "Update Pos";
             this.BUT_Updatepos.UseVisualStyleBackColor = true;
             this.BUT_Updatepos.Click += new System.EventHandler(this.BUT_Updatepos_Click);
-            // 
+
             // PNL_status
-            // 
-            this.PNL_status.Anchor = ((System.Windows.Forms.AnchorStyles)(((System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Bottom) 
-            | System.Windows.Forms.AnchorStyles.Right)));
+            this.PNL_status.Anchor = ((System.Windows.Forms.AnchorStyles)(((System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Bottom)
+                        | System.Windows.Forms.AnchorStyles.Right)));
             this.PNL_status.AutoScroll = true;
             this.PNL_status.Location = new System.Drawing.Point(783, 61);
             this.PNL_status.Name = "PNL_status";
             this.PNL_status.Size = new System.Drawing.Size(147, 398);
             this.PNL_status.TabIndex = 11;
-            // 
+
             // timer_status
-            // 
             this.timer_status.Enabled = true;
             this.timer_status.Interval = 200;
             this.timer_status.Tick += new System.EventHandler(this.timer_status_Tick);
-            // 
+
             // but_guided
-            // 
             this.but_guided.Location = new System.Drawing.Point(544, 12);
             this.but_guided.Name = "but_guided";
             this.but_guided.Size = new System.Drawing.Size(75, 23);
             this.but_guided.TabIndex = 12;
-            this.but_guided.Text = "Guided Mode (exl leader)";
+            this.but_guided.Text = "Guided Mode (All)";
             this.but_guided.UseVisualStyleBackColor = true;
             this.but_guided.Click += new System.EventHandler(this.but_guided_Click);
-            // 
+
             // but_auto
-            // 
             this.but_auto.Location = new System.Drawing.Point(625, 12);
             this.but_auto.Name = "but_auto";
             this.but_auto.Size = new System.Drawing.Size(75, 23);
             this.but_auto.TabIndex = 13;
-            this.but_auto.Text = "Auto Mode  (exl leader)";
+            this.but_auto.Text = "Loiter (For leader)";
             this.but_auto.UseVisualStyleBackColor = true;
             this.but_auto.Click += new System.EventHandler(this.but_auto_Click);
-            // 
-            // FormationControl
-            // 
-            this.ClientSize = new System.Drawing.Size(931, 471);
+
+            // NEW: LBL_TakeoffAltitude
+            this.LBL_TakeoffAltitude.AutoSize = true;
+            this.LBL_TakeoffAltitude.Location = new System.Drawing.Point(860, 15);
+            this.LBL_TakeoffAltitude.Name = "LBL_TakeoffAltitude";
+            this.LBL_TakeoffAltitude.Size = new System.Drawing.Size(49, 13);
+            this.LBL_TakeoffAltitude.TabIndex = 14;
+            this.LBL_TakeoffAltitude.Text = "Altitude:";
+
+            // NEW: NUM_TakeoffAltitude
+            this.NUM_TakeoffAltitude.Location = new System.Drawing.Point(915, 12);
+            this.NUM_TakeoffAltitude.Name = "NUM_TakeoffAltitude";
+            this.NUM_TakeoffAltitude.DecimalPlaces = 1;
+            this.NUM_TakeoffAltitude.Increment = 0.5M;
+            this.NUM_TakeoffAltitude.Minimum = 0.5M;
+            this.NUM_TakeoffAltitude.Maximum = 1000M;
+            this.NUM_TakeoffAltitude.Value = 5.0M;
+            this.NUM_TakeoffAltitude.Size = new System.Drawing.Size(60, 20);
+            this.NUM_TakeoffAltitude.TabIndex = 15;
+
+            // FormationControl (Form)
+            this.ClientSize = new System.Drawing.Size(990, 471); // ขยายกว้างให้พอดี
+            this.Controls.Add(this.NUM_TakeoffAltitude);
+            this.Controls.Add(this.LBL_TakeoffAltitude);
             this.Controls.Add(this.but_auto);
             this.Controls.Add(this.but_guided);
             this.Controls.Add(this.PNL_status);
@@ -219,30 +219,31 @@
             this.Name = "FormationControl";
             this.Text = "Control";
             this.FormClosing += new System.Windows.Forms.FormClosingEventHandler(this.Control_FormClosing);
+
             ((System.ComponentModel.ISupportInitialize)(this.bindingSource1)).EndInit();
             this.tabControl1.ResumeLayout(false);
             this.tabPage1.ResumeLayout(false);
+            ((System.ComponentModel.ISupportInitialize)(this.NUM_TakeoffAltitude)).EndInit();
             this.ResumeLayout(false);
-
+            this.PerformLayout();
         }
-
         #endregion
 
-        private Controls.MyButton BUT_Arm;
-        private Controls.MyButton BUT_Disarm;
-        private Controls.MyButton BUT_Takeoff;
-        private Controls.MyButton BUT_Land;
+        private MissionPlanner.Controls.MyButton BUT_Arm;
+        private MissionPlanner.Controls.MyButton BUT_Disarm;
+        private MissionPlanner.Controls.MyButton BUT_Takeoff;
+        private MissionPlanner.Controls.MyButton BUT_Land;
         private System.Windows.Forms.ComboBox CMB_mavs;
-        private Controls.MyButton BUT_leader;
-        private Controls.MyButton BUT_Start;
-        private Grid grid1;
+        private MissionPlanner.Controls.MyButton BUT_leader;
+        private MissionPlanner.Controls.MyButton BUT_Start;
+        private MissionPlanner.Swarm.Grid grid1;
         private System.Windows.Forms.BindingSource bindingSource1;
         private System.Windows.Forms.TabControl tabControl1;
         private System.Windows.Forms.TabPage tabPage1;
-        private Controls.MyButton BUT_Updatepos;
+        private MissionPlanner.Controls.MyButton BUT_Updatepos;
         private System.Windows.Forms.FlowLayoutPanel PNL_status;
         private System.Windows.Forms.Timer timer_status;
-        private Controls.MyButton but_guided;
-        private Controls.MyButton but_auto;
+        private MissionPlanner.Controls.MyButton but_guided;
+        private MissionPlanner.Controls.MyButton but_auto;
     }
 }
