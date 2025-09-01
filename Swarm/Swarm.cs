@@ -1,7 +1,7 @@
 ﻿using log4net;
 using System.Reflection;
 using System.Threading;
-using System.Threading.Tasks; // ★ เพิ่ม
+using System.Threading.Tasks;
 using System;
 
 namespace MissionPlanner.Swarm
@@ -38,7 +38,6 @@ namespace MissionPlanner.Swarm
             catch (Exception ex) { log.Warn($"SetMode {mode} failed for sysid {mav?.sysid}", ex); }
         }
 
-        // (ยังคงไว้ เผื่อใช้ที่อื่นต่อ)
         private bool DoTakeoffWithRetry(dynamic port, MAVState mav, float alt, int retries = 1, int delayMs = 300)
         {
             for (int i = 0; i <= retries; i++)
@@ -80,7 +79,6 @@ namespace MissionPlanner.Swarm
             }
         }
 
-        // ★★ แก้ให้ยิงคำสั่งแบบ background + parallel และ return ทันที ★★
         public void Takeoff(float altitude)
         {
             if (float.IsNaN(altitude) || altitude <= 0f) altitude = 0.5f;
@@ -93,7 +91,6 @@ namespace MissionPlanner.Swarm
                     {
                         try
                         {
-                            // สไตล์ที่คุณต้องการ: ตั้ง GUIDED แล้วสั่ง TAKEOFF ตรง ๆ
                             port.setMode(mav.sysid, mav.compid, MODE_GUIDED);
                             port.doCommand(
                                 mav.sysid, mav.compid,
@@ -103,7 +100,7 @@ namespace MissionPlanner.Swarm
                         }
                         catch
                         {
-                            // เงียบไว้ตามต้องการ (หลีกเลี่ยงการหยุดทั้งฝูง)
+                        
                         }
                     });
                 });
@@ -123,7 +120,7 @@ namespace MissionPlanner.Swarm
 
         public void Stop()
         {
-            // ไว้ต่อยอดภายหลังถ้าต้องการ
+            
         }
 
         public void GuidedMode()
@@ -137,11 +134,10 @@ namespace MissionPlanner.Swarm
             }
         }
 
-        public void AutoMode() //Loiter
+        public void AutoMode() 
         {
             if (Leader == null) return;
 
-            // สั่งโหมด LOITER เฉพาะลำ Leader เท่านั้น
             foreach (var port in MainV2.Comports)
             {
                 foreach (var mav in port.MAVlist)
@@ -149,7 +145,7 @@ namespace MissionPlanner.Swarm
                     if (mav == Leader)
                     {
                         SetModeSafe(port, mav, MODE_LOITER);
-                        return; // เจอ Leader แล้วก็จบ ไม่ยุ่งลำอื่น
+                        return; 
                     }
                 }
             }
